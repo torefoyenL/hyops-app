@@ -1,6 +1,3 @@
-import matplotlib
-matplotlib.use("Agg")
-
 import contextlib
 import time
 import streamlit as st
@@ -234,61 +231,75 @@ st.sidebar.title("⚙️ HyOps Configuration")
 with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
     topology_mode = st.selectbox("Wiring mode", ["common", "pooled_ez_dedicated_comp", "trains"])
     if topology_mode == "common":
-        n_ez        = st.slider("Electrolyzers", 1, 8, 3)
-        stacks      = st.slider("Stacks per electrolyzer", 1, 4, 2)
-        ez_kg_day   = st.number_input("Electrolyzer capacity (kg/day)", 1.0, value=132.0, step=1.0)
-        n_comp      = st.slider("Compressors", 1, 6, 2)
-        comp_kg_day = st.number_input("Compressor flow (kg/day)", 1.0, value=132.0, step=1.0)
-        n_fill      = st.slider("Shared fill lines", 1, 12, 4)
+        n_ez          = st.slider("Electrolyzers", 1, 8, 3)
+        stacks        = st.slider("Stacks per electrolyzer", 1, 4, 2)
+        ez_kg_hr_each = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
+        n_comp        = st.slider("Compressors", 1, 6, 2)
+        comp_kg_hr_total = st.number_input("Total compressor flow (kg/hr)", 1.0, value=132.0, step=1.0)
+        n_fill        = st.slider("Shared fill lines", 1, 12, 4)
         TOPOLOGY = pt.PlantTopology(
             mode="common", n_electrolyzers=n_ez, stacks_per_electrolyzer=stacks,
-            electrolyzer_kg_per_hr_each=(ez_kg_day/24)/n_ez,
+            electrolyzer_kg_per_hr_each=ez_kg_hr_each,
             n_compressors=n_comp,
-            compressor_flow_kg_per_hr_each=(comp_kg_day/24)/n_comp,
+            compressor_flow_kg_per_hr_each=comp_kg_hr_total / n_comp,
             n_fill_lines=n_fill,
         )
     elif topology_mode == "pooled_ez_dedicated_comp":
-        n_ez           = st.slider("Electrolyzers", 1, 8, 3)
-        stacks         = st.slider("Stacks per electrolyzer", 1, 4, 2)
-        ez_kg_day      = st.number_input("Electrolyzer capacity (kg/day)", 1.0, value=132.0, step=1.0)
-        n_comp         = st.slider("Compressors", 1, 6, 2)
-        comp_kg_day    = st.number_input("Compressor flow (kg/day)", 1.0, value=132.0, step=1.0)
+        n_ez          = st.slider("Electrolyzers", 1, 8, 3)
+        stacks        = st.slider("Stacks per electrolyzer", 1, 4, 2)
+        ez_kg_hr_each = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
+        n_comp        = st.slider("Compressors", 1, 6, 2)
+        comp_kg_hr_total = st.number_input("Total compressor flow (kg/hr)", 1.0, value=132.0, step=1.0)
         lines_per_comp = st.slider("Fill lines per compressor", 1, 6, 2)
         TOPOLOGY = pt.PlantTopology(
             mode="pooled_ez_dedicated_comp",
             n_electrolyzers=n_ez, stacks_per_electrolyzer=stacks,
-            electrolyzer_kg_per_hr_each=(ez_kg_day/24)/n_ez,
+            electrolyzer_kg_per_hr_each=ez_kg_hr_each,
             n_compressors=n_comp,
-            compressor_flow_kg_per_hr_each=(comp_kg_day/24)/n_comp,
+            compressor_flow_kg_per_hr_each=comp_kg_hr_total / n_comp,
             n_fill_lines_per_compressor=lines_per_comp,
         )
     else:
-        n_trains          = st.slider("Number of trains", 2, 4, 2)
-        ez_per_train      = st.slider("Electrolyzers per train", 1, 4, 2)
-        stacks            = st.slider("Stacks per electrolyzer", 1, 4, 2)
-        ez_kg_day_train   = st.number_input("EZ capacity per train (kg/day)", 1.0, value=66.0, step=1.0)
-        comp_per_train    = st.slider("Compressors per train", 1, 3, 1)
-        comp_kg_day_train = st.number_input("Compressor flow per train (kg/day)", 1.0, value=66.0, step=1.0)
-        lines_per_train   = st.slider("Fill lines per train", 1, 6, 2)
+        n_trains             = st.slider("Number of trains", 2, 4, 2)
+        ez_per_train         = st.slider("Electrolyzers per train", 1, 4, 2)
+        stacks               = st.slider("Stacks per electrolyzer", 1, 4, 2)
+        ez_kg_hr_each_train  = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=22.0, step=1.0)
+        comp_per_train       = st.slider("Compressors per train", 1, 3, 1)
+        comp_kg_hr_train_tot = st.number_input("Total compressor flow per train (kg/hr)", 1.0, value=66.0, step=1.0)
+        lines_per_train      = st.slider("Fill lines per train", 1, 6, 2)
         TOPOLOGY = pt.PlantTopology(
             mode="trains",
             trains=[
                 pt.Train(
                     label=f"Train {i+1}", n_electrolyzers=ez_per_train,
-                    electrolyzer_kg_per_hr_each=(ez_kg_day_train/24)/ez_per_train,
+                    electrolyzer_kg_per_hr_each=ez_kg_hr_each_train,
                     n_compressors=comp_per_train,
-                    compressor_flow_kg_per_hr_each=(comp_kg_day_train/24)/comp_per_train,
+                    compressor_flow_kg_per_hr_each=comp_kg_hr_train_tot / comp_per_train,
                     n_fill_lines=lines_per_train, stacks_per_electrolyzer=stacks,
                 )
                 for i in range(n_trains)
             ],
         )
-    theo  = TOPOLOGY.theoretical_capacity_kg_per_day()
-    bneck = "compressor" if TOPOLOGY.compressor_is_bottleneck() else "electrolyzer"
+
+    ez_cap   = TOPOLOGY.theoretical_capacity_kg_per_hr()
+    comp_cap = TOPOLOGY.theoretical_compressor_capacity_kg_per_hr()
+    theo_hr  = min(ez_cap, comp_cap)
+    theo_day = theo_hr * 24
+    bneck    = "compressor" if TOPOLOGY.compressor_is_bottleneck() else "electrolyzer"
+
+    # Overcapacity / balance info
+    if ez_cap > comp_cap:
+        overcap = f"⚠️ Compressor undersized — EZ can produce {ez_cap:.1f} kg/hr but comp handles {comp_cap:.1f} kg/hr"
+    elif comp_cap > ez_cap * 1.05:
+        overcap = f"ℹ️ Compressor has spare capacity — {comp_cap:.1f} kg/hr vs {ez_cap:.1f} kg/hr EZ output"
+    else:
+        overcap = f"✅ Balanced — EZ {ez_cap:.1f} kg/hr · Comp {comp_cap:.1f} kg/hr"
+
     st.caption(
         f"**{TOPOLOGY.total_electrolyzers()} EZ · {TOPOLOGY.total_compressors()} comp · "
         f"{TOPOLOGY.total_fill_lines()} fill lines**  \n"
-        f"Theoretical: **{theo:.1f} kg/day** ({bneck} limited)"
+        f"Bottleneck: **{bneck}** · {theo_hr:.1f} kg/hr · {theo_day:.0f} kg/day  \n"
+        f"{overcap}"
     )
 
 # ── RAM on/off ───────────────────────────────────────────────
@@ -357,7 +368,7 @@ st.title("🛢️ HyOps — Hydrogen Plant Simulation & Economics")
 st.caption(
     f"**{TOPOLOGY.mode}** · {TOPOLOGY.total_electrolyzers()} EZ · "
     f"{TOPOLOGY.total_compressors()} comp · {TOPOLOGY.total_fill_lines()} fill lines · "
-    f"{theo:.0f} kg/day · RAM {'🟢 ON' if RELIABILITY_ON else '⚪ OFF'} · "
+    f"{theo_day:.0f} kg/day · RAM {'🟢 ON' if RELIABILITY_ON else '⚪ OFF'} · "
     f"{avg_arrivals}/day ({pattern_type}) · {int(sim_days)} days"
 )
 
@@ -853,17 +864,11 @@ with tab_ops:
             _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_weight)
             with st.spinner("Simulating..."):
                 result = po.run_simulation(
-    container_types=_containers,
-    plant=_plant,
-    avg_arrivals_per_day=float(avg_arrivals),
-    days=int(sim_days),
-    step_minutes=1,
-    schedule=_schedule,
-    arrival_pattern=_pattern,
-    reliability_model=_rel_model,
-)
-                kpis = rpo.compute_kpis(result, _plant, _containers,
-                         float(avg_arrivals), int(sim_days))
+                    plant=_plant, days=int(sim_days), schedule=_schedule,
+                    container_types=_containers, avg_arrivals_per_day=float(avg_arrivals),
+                    arrival_pattern=_pattern, reliability_model=_rel_model,
+                )
+                kpis = rpo.compute_kpis(result)
                 econ = eco.run_economics(
                     result, kpis, schedule_label, int(sim_days),
                     margin_kr_per_kg=float(st.session_state["margin_kr"]),
@@ -887,7 +892,7 @@ with tab_ops:
                 st.dataframe(pd.DataFrame([econ]).T.rename(columns={0: "value"}), use_container_width=True)
             with st.expander("Operations plots"):
                 with silence_show():
-                    rpo.plot_results(result)
+                    rpo.plot_operations(result, TOPOLOGY)
                 show_figs()
 
     with sub_schedule:
