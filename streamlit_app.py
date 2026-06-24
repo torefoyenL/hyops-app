@@ -230,13 +230,13 @@ st.sidebar.title("⚙️ HyOps Configuration")
 # ── Topology ─────────────────────────────────────────────────
 with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
     topology_mode = st.selectbox("Wiring mode", ["common", "pooled_ez_dedicated_comp", "trains"])
-    if topology_mode == "common": (
-        n_ez          = st.slider("Electrolyzers", 1, 8, 3)
-        stacks        = st.slider("Stacks per electrolyzer", 1, 4, 2)
-        ez_kg_hr_each = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
-        n_comp        = st.slider("Compressors", 1, 6, 2)
-        comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=ez_kg_hr_each * n_ez / n_comp, step=1.0)
-        n_fill        = st.slider("Shared fill lines", 1, 12, 4)
+    if topology_mode == "common":
+        n_ez            = st.slider("Electrolyzers", 1, 8, 3)
+        stacks          = st.slider("Stacks per electrolyzer", 1, 4, 2)
+        ez_kg_hr_each   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
+        n_comp          = st.slider("Compressors", 1, 6, 2)
+        comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=round(ez_kg_hr_each * n_ez / n_comp, 1), step=1.0)
+        n_fill          = st.slider("Shared fill lines", 1, 12, 4)
         TOPOLOGY = pt.PlantTopology(
             mode="common", n_electrolyzers=n_ez, stacks_per_electrolyzer=stacks,
             electrolyzer_kg_per_hr_each=ez_kg_hr_each,
@@ -244,19 +244,19 @@ with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
             compressor_flow_kg_per_hr_each=comp_kg_hr_each,
             n_fill_lines=n_fill,
         )
-    elif topology_mode == "pooled_ez_dedicated_comp":(
-        n_ez          = st.slider("Electrolyzers", 1, 8, 3)
-        stacks        = st.slider("Stacks per electrolyzer", 1, 4, 2)
-        ez_kg_hr_each = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
-        n_comp        = st.slider("Compressors", 1, 6, 2)
-        comp_kg_hr_total = st.number_input("Total compressor flow (kg/hr)", 1.0, value=132.0, step=1.0)
-        lines_per_comp = st.slider("Fill lines per compressor", 1, 6, 2)
+    elif topology_mode == "pooled_ez_dedicated_comp":
+        n_ez            = st.slider("Electrolyzers", 1, 8, 3)
+        stacks          = st.slider("Stacks per electrolyzer", 1, 4, 2)
+        ez_kg_hr_each   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
+        n_comp          = st.slider("Compressors", 1, 6, 2)
+        comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=round(ez_kg_hr_each * n_ez / n_comp, 1), step=1.0)
+        lines_per_comp  = st.slider("Fill lines per compressor", 1, 6, 2)
         TOPOLOGY = pt.PlantTopology(
             mode="pooled_ez_dedicated_comp",
             n_electrolyzers=n_ez, stacks_per_electrolyzer=stacks,
             electrolyzer_kg_per_hr_each=ez_kg_hr_each,
             n_compressors=n_comp,
-            compressor_flow_kg_per_hr_each=comp_kg_hr_total / n_comp,
+            compressor_flow_kg_per_hr_each=comp_kg_hr_each,
             n_fill_lines_per_compressor=lines_per_comp,
         )
     else:
@@ -265,7 +265,7 @@ with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
         stacks               = st.slider("Stacks per electrolyzer", 1, 4, 2)
         ez_kg_hr_each_train  = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=22.0, step=1.0)
         comp_per_train       = st.slider("Compressors per train", 1, 3, 1)
-        comp_kg_hr_train_tot = st.number_input("Total compressor flow per train (kg/hr)", 1.0, value=66.0, step=1.0)
+        comp_kg_hr_each_train = st.number_input("Flow per compressor (kg/hr)", 1.0, value=round(ez_kg_hr_each_train * ez_per_train / comp_per_train, 1), step=1.0)
         lines_per_train      = st.slider("Fill lines per train", 1, 6, 2)
         TOPOLOGY = pt.PlantTopology(
             mode="trains",
@@ -274,7 +274,7 @@ with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
                     label=f"Train {i+1}", n_electrolyzers=ez_per_train,
                     electrolyzer_kg_per_hr_each=ez_kg_hr_each_train,
                     n_compressors=comp_per_train,
-                    compressor_flow_kg_per_hr_each=comp_kg_hr_train_tot / comp_per_train,
+                    compressor_flow_kg_per_hr_each=comp_kg_hr_each_train,
                     n_fill_lines=lines_per_train, stacks_per_electrolyzer=stacks,
                 )
                 for i in range(n_trains)
