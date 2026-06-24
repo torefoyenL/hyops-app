@@ -400,7 +400,7 @@ def plot_results(results):
         ]
 
         for ax, (title, color, data) in zip(axes, zone_data):
-            bp = ax.boxplot(data, labels=types, patch_artist=True,
+            bp = ax.boxplot(data, tick_labels=types, patch_artist=True,
                             boxprops=dict(facecolor=color, alpha=0.6))
             ax.set_title(title)
             ax.set_ylabel("Minutes")
