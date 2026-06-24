@@ -207,8 +207,8 @@ def default_topology_132kg_day() -> PlantTopology:
         mode="common",
         n_electrolyzers=3,
         stacks_per_electrolyzer=2,
-        electrolyzer_kg_per_hr_each=(132  / 3,
+        electrolyzer_kg_per_hr_each=(132  / 3),
         n_compressors=2,
-        compressor_flow_kg_per_hr_each=(132 / 2,
+        compressor_flow_kg_per_hr_each=(132 / 2),
         n_fill_lines=4,
     )
