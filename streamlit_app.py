@@ -853,10 +853,15 @@ with tab_ops:
             _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_weight)
             with st.spinner("Simulating..."):
                 result = po.run_simulation(
-                    plant=_plant, days=int(sim_days), schedule=_schedule,
-                    container_types=_containers, avg_arrivals_per_day=float(avg_arrivals),
-                    arrival_pattern=_pattern, reliability_model=_rel_model,
-                )
+    container_types=_containers,
+    plant=_plant,
+    avg_arrivals_per_day=float(avg_arrivals),
+    days=int(sim_days),
+    step_minutes=1,
+    schedule=_schedule,
+    arrival_pattern=_pattern,
+    reliability_model=_rel_model,
+)
                 kpis = rpo.compute_kpis(result)
                 econ = eco.run_economics(
                     result, kpis, schedule_label, int(sim_days),
