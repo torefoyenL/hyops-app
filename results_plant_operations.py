@@ -13,11 +13,6 @@ Time zones per container
 
 from plant_operations import adiabatic_compression_energy
 
-
-# ============================================================
-# Architecture diagram colour palette
-# ============================================================
-
 _AC = {
     "bg":     "#1a1a2e",
     "ez":     "#16213e",
@@ -85,7 +80,7 @@ def compute_kpis(results, plant, container_types,
     # ----------------------------------------------------------
     ext_log    = results["queue_log"]          # outside filling area
     docked_log = results.get("docked_log", [])
-    fill_log   = results.get("filling_log")
+    fill_log   = results["filling_log"]
 
     # ----------------------------------------------------------
     # Per-compressor stats
@@ -382,25 +377,25 @@ def plot_results(results):
     # =========================================================
     # 5️⃣  Box plots by container type — all 3 zones
     # =========================================================
-    types = sorted({c.ctype.name for c in completed})
+    types = sorted({c.container_type.name for c in completed})
 
     if len(types) > 1:
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
         zone_data = [
             ("External Wait",  "firebrick",
              [[max((c.dock_step - c.arrival_step)*step_minutes, 0)
-               for c in completed if c.ctype.name == t and c.dock_step is not None]
+               for c in completed if c.container_type.name == t and c.dock_step is not None]
               for t in types]),
             ("Docked Wait",    "darkorange",
              [[max((c.start_fill_step - c.dock_step)*step_minutes, 0)
                for c in completed
-               if c.ctype.name == t and c.dock_step is not None
+               if c.container_type.name == t and c.dock_step is not None
                and c.start_fill_step is not None]
               for t in types]),
             ("Fill Time",      "steelblue",
              [[max((c.completion_step - c.start_fill_step)*step_minutes, 0)
                for c in completed
-               if c.ctype.name == t and c.start_fill_step is not None]
+               if c.container_type.name == t and c.start_fill_step is not None]
               for t in types]),
         ]
 
