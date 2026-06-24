@@ -245,11 +245,9 @@ def add_economics_columns(
         # Schedules that are manned 100% of the time (e.g. "24/7" weekday
         # hours with weekend open) never have an unmanned external queue,
         # so the approximation should report zero queue cost for them.
-        if "weekday_hours" in df.columns:
-            fully_manned = df["weekday_hours"].astype(str).str.contains(
-                r"(0, 24)", regex=False
-            )
-            df.loc[fully_manned, "queue_cost_kr_annual"] = 0.0
+        _fully_manned = ["24_7", "8-16_closed", "8-20_closed", "8-24_closed",
+                         "8-16_open", "8-20_open", "8-24_open"]
+        df.loc[df["schedule_label"].isin(_fully_manned), "queue_cost_kr_annual"] = 0.0
 
     df["total_cost_kr_annual"] = df["staff_cost_kr_annual"] + df["queue_cost_kr_annual"]
     df["net_kr_annual"]        = df["revenue_kr_annual"] - df["total_cost_kr_annual"]
