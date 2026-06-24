@@ -13,7 +13,17 @@ class ContainerType:
 
 
 def adiabatic_compression_energy(mass_kg, P1_bar=30, P2_bar=380, T=298):
-    pass
+    """Returns energy in kWh to compress H2 mass from P1 to P2 adiabatically."""
+    if mass_kg <= 0:
+        return 0.0
+    gamma = 1.41
+    R     = 8.314
+    M     = 0.002016
+    n     = mass_kg / M
+    P1    = P1_bar * 1e5
+    P2    = P2_bar * 1e5
+    work_joules = (n * R * T) / (gamma - 1) * ((P2 / P1)**((gamma - 1) / gamma) - 1)
+    return work_joules / 3.6e6
 
 
 class Container:
