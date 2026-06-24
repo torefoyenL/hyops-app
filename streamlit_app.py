@@ -862,7 +862,8 @@ with tab_ops:
     arrival_pattern=_pattern,
     reliability_model=_rel_model,
 )
-                kpis = rpo.compute_kpis(result, _plant, _containers)
+                kpis = rpo.compute_kpis(result, _plant, _containers,
+                         float(avg_arrivals), int(sim_days))
                 econ = eco.run_economics(
                     result, kpis, schedule_label, int(sim_days),
                     margin_kr_per_kg=float(st.session_state["margin_kr"]),
