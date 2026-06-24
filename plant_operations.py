@@ -517,4 +517,5 @@ def run_simulation(container_types, plant, avg_arrivals_per_day, days, step_minu
         "fill_lines_up_log":    fill_lines_up_log,
         "pm_active_log":        pm_active_log,
         "reliability_summary":  reliability_model.summary() if reliability_model else None,
+        "step_minutes":         step_minutes,
     }
