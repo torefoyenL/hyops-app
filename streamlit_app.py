@@ -260,13 +260,13 @@ with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
             n_fill_lines_per_compressor=lines_per_comp,
         )
     else:
-        n_trains             = st.slider("Number of trains", 2, 4, 2)
-        ez_per_train         = st.slider("Electrolyzers per train", 1, 4, 2)
-        stacks               = st.slider("Stacks per electrolyzer", 1, 4, 2)
-        ez_kg_hr_each_train  = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=22.0, step=1.0)
-        comp_per_train       = st.slider("Compressors per train", 1, 3, 1)
+        n_trains              = st.slider("Number of trains", 2, 4, 2)
+        ez_per_train          = st.slider("Electrolyzers per train", 1, 4, 2)
+        stacks                = st.slider("Stacks per electrolyzer", 1, 4, 2)
+        ez_kg_hr_each_train   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=22.0, step=1.0)
+        comp_per_train        = st.slider("Compressors per train", 1, 3, 1)
         comp_kg_hr_each_train = st.number_input("Flow per compressor (kg/hr)", 1.0, value=round(ez_kg_hr_each_train * ez_per_train / comp_per_train, 1), step=1.0)
-        lines_per_train      = st.slider("Fill lines per train", 1, 6, 2)
+        lines_per_train       = st.slider("Fill lines per train", 1, 6, 2)
         TOPOLOGY = pt.PlantTopology(
             mode="trains",
             trains=[
@@ -892,6 +892,9 @@ with tab_ops:
             with st.expander("Economics"):
                 import pandas as pd
                 st.dataframe(pd.DataFrame([econ]).T.rename(columns={0: "value"}), use_container_width=True)
+                with silence_show():
+                    ep.plot_waterfall(econ)
+                show_figs()
             with st.expander("Operations plots"):
                 with silence_show():
                     rpo.plot_results(result)
@@ -928,6 +931,28 @@ with tab_ops:
             import pandas as pd
             df = pd.DataFrame(rows).set_index("schedule")
             st.dataframe(df, use_container_width=True)
+
+            # Economics plots
+            econ_rows = []
+            for r in rows:
+                econ_rows.append({
+                    "schedule_label": r["schedule"],
+                    **{k: v for k, v in r.items() if "kr" in k}
+                })
+            econ_df_cmp = pd.DataFrame(econ_rows)
+            if not econ_df_cmp.empty and "revenue_kr_annual" in econ_df_cmp.columns:
+                sched_order = [s for s in ALL_SCHEDULES if s in econ_df_cmp["schedule_label"].values]
+                summary = eco.economics_summary(econ_df_cmp, group_by=["schedule_label"])
+                summary = (summary.set_index("schedule_label")
+                           .reindex(sched_order).dropna(how="all").reset_index())
+                st.subheader("Revenue vs. cost breakdown")
+                with silence_show():
+                    ep.plot_stacked_bar(summary)
+                show_figs()
+                st.subheader("Net result spread")
+                with silence_show():
+                    ep.plot_net_result_spread(econ_df_cmp, sched_order, float(avg_arrivals), 1)
+                show_figs()
 
 
 # ────────────────────────────────────────────────────────────
