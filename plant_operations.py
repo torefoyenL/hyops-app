@@ -465,16 +465,7 @@ def run_simulation(container_types, plant, avg_arrivals_per_day, days, step_minu
 
         is_manned = schedule.is_manned(step, N_step_day)
 
-        if not schedule.manned:
-            # Fully unmanned site — drivers self-serve, admit all
-            plant.admit_all(step)
-        elif is_manned:
-            # Staffed hours — staff admit and assign
-            plant.admit_all(step)
-        else:
-            # Off-hours on a normally-staffed site — no new docking,
-            # but keep filling already-docked containers
-            plant.assign_idle_compressors(step)
+
             
         manned_log.append(int(is_manned))
 
@@ -487,11 +478,15 @@ def run_simulation(container_types, plant, avg_arrivals_per_day, days, step_minu
             plant.external_queue.append(Container(ct, step))
         arrival_log.append(n_arrivals)
 
-        if is_manned or not plant.manned if hasattr(plant, 'manned') else is_manned:
+        if not schedule.manned:
+            # Fully unmanned site — drivers self-serve, admit all
             plant.admit_all(step)
-        elif not schedule.manned:
+        elif is_manned:
+            # Staffed hours — staff admit and assign
             plant.admit_all(step)
         else:
+            # Off-hours on a normally-staffed site — no new docking,
+            # but keep filling already-docked containers
             plant.assign_idle_compressors(step)
 
         pressure, energy = plant.fill_containers()
