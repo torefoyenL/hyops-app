@@ -244,7 +244,7 @@ def plot_results(results):
     arrival_log       = results["arrival_log"]
     ext_log           = results["queue_log"]
     docked_log        = results.get("docked_log", [])
-    filling_log       = results.get("filling_log", results["active_log"])
+    filling_log       = results["filling_log"]
     comp_filling_log  = results.get("comp_filling_log",  None)
     completed         = results["completed"]
 
