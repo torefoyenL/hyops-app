@@ -230,14 +230,14 @@ st.sidebar.title("⚙️ HyOps Configuration")
 # ── Topology ─────────────────────────────────────────────────
 with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
     topology_mode = st.selectbox("Wiring mode", ["common", "pooled_ez_dedicated_comp", "trains"])
-    if topology_mode == "common":
+    if topology_mode == "common": (
         n_ez          = st.slider("Electrolyzers", 1, 8, 3)
-stacks        = st.slider("Stacks per electrolyzer", 1, 4, 2)
-ez_kg_hr_each = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
-n_comp        = st.slider("Compressors", 1, 6, 2)
-comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=ez_kg_hr_each * n_ez / n_comp, step=1.0)
-n_fill        = st.slider("Shared fill lines", 1, 12, 4)
-TOPOLOGY = pt.PlantTopology(
+        stacks        = st.slider("Stacks per electrolyzer", 1, 4, 2)
+        ez_kg_hr_each = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
+        n_comp        = st.slider("Compressors", 1, 6, 2)
+        comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=ez_kg_hr_each * n_ez / n_comp, step=1.0)
+        n_fill        = st.slider("Shared fill lines", 1, 12, 4)
+        TOPOLOGY = pt.PlantTopology(
     mode="common", n_electrolyzers=n_ez, stacks_per_electrolyzer=stacks,
     electrolyzer_kg_per_hr_each=ez_kg_hr_each,
     n_compressors=n_comp,
