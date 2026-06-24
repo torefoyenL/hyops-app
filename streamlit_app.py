@@ -887,7 +887,7 @@ with tab_ops:
                 st.dataframe(pd.DataFrame([econ]).T.rename(columns={0: "value"}), use_container_width=True)
             with st.expander("Operations plots"):
                 with silence_show():
-                    rpo.plot_simulation_results(result, TOPOLOGY)
+                    rpo.plot_results(result)
                 show_figs()
 
     with sub_schedule:
