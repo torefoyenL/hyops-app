@@ -116,7 +116,7 @@ def compute_kpis(results, plant, container_types,
     ref_per_kg   = ref_kwh / plant.total_dispensed if plant.total_dispensed > 0 else 0
 
     container_counts = {
-        t.name: sum(1 for c in completed if c.ctype.name == t.name)
+        t.name: sum(1 for c in completed if c.container_type.name == t.name)
         for t in container_types
     }
 
