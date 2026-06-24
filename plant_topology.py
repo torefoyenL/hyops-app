@@ -77,10 +77,10 @@ class PlantTopology:
     # --- plant-level fields (mode in {"common", "pooled_ez_dedicated_comp"}) ---
     n_electrolyzers: int = 3
     stacks_per_electrolyzer: int = 2
-    electrolyzer_kg_per_hr_each: float = (132 / 24) / 3   # 132 kg/day plant / 3 EZ
+    electrolyzer_kg_per_hr_each: float = 44.0   # 132 kg/hr / 3 EZ
 
     n_compressors: int = 2
-    compressor_flow_kg_per_hr_each: float = (132 / 24) / 2
+    compressor_flow_kg_per_hr_each: float = 66.0  # 132 kg/hr / 2 comp
 
     # mode="common": total shared fill lines.
     # mode="pooled_ez_dedicated_comp": fill lines PER COMPRESSOR (so total
