@@ -864,11 +864,13 @@ with tab_ops:
             _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_weight)
             with st.spinner("Simulating..."):
                 result = po.run_simulation(
+                    container_types=_containers,
                     plant=_plant, days=int(sim_days), schedule=_schedule,
-                    container_types=_containers, avg_arrivals_per_day=float(avg_arrivals),
+                    avg_arrivals_per_day=float(avg_arrivals), step_minutes=1,
                     arrival_pattern=_pattern, reliability_model=_rel_model,
                 )
-                kpis = rpo.compute_kpis(result)
+                kpis = rpo.compute_kpis(result, _plant, _containers,
+                                         float(avg_arrivals), int(sim_days))
                 econ = eco.run_economics(
                     result, kpis, schedule_label, int(sim_days),
                     margin_kr_per_kg=float(st.session_state["margin_kr"]),
@@ -892,7 +894,7 @@ with tab_ops:
                 st.dataframe(pd.DataFrame([econ]).T.rename(columns={0: "value"}), use_container_width=True)
             with st.expander("Operations plots"):
                 with silence_show():
-                    rpo.plot_operations(result, TOPOLOGY)
+                    rpo.plot_results(result)
                 show_figs()
 
     with sub_schedule:
@@ -909,11 +911,13 @@ with tab_ops:
                     _plant  = po.HydrogenPlant(topology=TOPOLOGY, step_minutes=1)
                     _rel    = make_rel_model(TOPOLOGY, RELIABILITY_SEED, RELIABILITY_ON)
                     result  = po.run_simulation(
+                        container_types=_containers,
                         plant=_plant, days=int(sim_days), schedule=make_schedule(lbl),
-                        container_types=_containers, avg_arrivals_per_day=float(avg_arrivals),
+                        avg_arrivals_per_day=float(avg_arrivals), step_minutes=1,
                         arrival_pattern=_pattern, reliability_model=_rel,
                     )
-                    kpis = rpo.compute_kpis(result)
+                    kpis = rpo.compute_kpis(result, _plant, _containers,
+                                             float(avg_arrivals), int(sim_days))
                     econ = eco.run_economics(
                         result, kpis, lbl, int(sim_days),
                         margin_kr_per_kg=float(st.session_state["margin_kr"]),
@@ -948,7 +952,7 @@ with tab_econ:
         rel_settings = (
             [("off", False)] if rel_opt == "Off only" else
             [("on",  True)]  if rel_opt == "On only"  else
-            mc.default_reliability_settings()
+            [("off", False), ("on", True)]
         )
         sw_pat = st.selectbox("Arrival timing", ["uniform","single_peak","double_peak","All three"], key="sw_pat")
         sw_patterns = (
