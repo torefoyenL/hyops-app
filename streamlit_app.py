@@ -238,12 +238,12 @@ with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
         comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=ez_kg_hr_each * n_ez / n_comp, step=1.0)
         n_fill        = st.slider("Shared fill lines", 1, 12, 4)
         TOPOLOGY = pt.PlantTopology(
-    mode="common", n_electrolyzers=n_ez, stacks_per_electrolyzer=stacks,
-    electrolyzer_kg_per_hr_each=ez_kg_hr_each,
-    n_compressors=n_comp,
-    compressor_flow_kg_per_hr_each=comp_kg_hr_each,
-    n_fill_lines=n_fill,
-)
+            mode="common", n_electrolyzers=n_ez, stacks_per_electrolyzer=stacks,
+            electrolyzer_kg_per_hr_each=ez_kg_hr_each,
+            n_compressors=n_comp,
+            compressor_flow_kg_per_hr_each=comp_kg_hr_each,
+            n_fill_lines=n_fill,
+        )
     elif topology_mode == "pooled_ez_dedicated_comp":(
         n_ez          = st.slider("Electrolyzers", 1, 8, 3)
         stacks        = st.slider("Stacks per electrolyzer", 1, 4, 2)
