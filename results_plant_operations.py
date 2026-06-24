@@ -85,7 +85,7 @@ def compute_kpis(results, plant, container_types,
     # ----------------------------------------------------------
     ext_log    = results["queue_log"]          # outside filling area
     docked_log = results.get("docked_log", [])
-    fill_log   = results.get("filling_log", results["active_log"])
+    fill_log   = results.get("filling_log")
 
     # ----------------------------------------------------------
     # Per-compressor stats
