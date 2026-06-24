@@ -244,7 +244,7 @@ TOPOLOGY = pt.PlantTopology(
     compressor_flow_kg_per_hr_each=comp_kg_hr_each,
     n_fill_lines=n_fill,
 )
-    elif topology_mode == "pooled_ez_dedicated_comp":
+    elif topology_mode == "pooled_ez_dedicated_comp":(
         n_ez          = st.slider("Electrolyzers", 1, 8, 3)
         stacks        = st.slider("Stacks per electrolyzer", 1, 4, 2)
         ez_kg_hr_each = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
