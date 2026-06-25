@@ -851,7 +851,188 @@ with tab_plant:
 # TAB 2 — Operations
 # ────────────────────────────────────────────────────────────
 with tab_ops:
-    sub_single, sub_schedule = st.tabs(["🔬 Single run", "📋 Schedule comparison"])
+    sub_fleet, sub_single, sub_schedule = st.tabs([
+        "📊 Fleet & Arrivals", "🔬 Single run", "📋 Schedule comparison",
+    ])
+
+    with sub_fleet:
+        import plotly.graph_objects as go
+        import numpy as np
+
+        _containers = make_container_types(frac_a, frac_b, frac_c)
+        _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_weight)
+        _type_colors = {"Type-A": "#2196F3", "Type-B": "#FF9800", "Type-C": "#4CAF50"}
+
+        # ── 1. Container fleet composition ──────────────────────
+        st.subheader("Container Fleet")
+        fig_fleet = go.Figure()
+        for ct in _containers:
+            fig_fleet.add_trace(go.Bar(
+                x=[ct.name], y=[ct.fleet_fraction * 100],
+                name=f"{ct.name} ({ct.max_capacity_kg:.0f} kg)",
+                marker_color=_type_colors[ct.name],
+                text=f"{ct.fleet_fraction*100:.0f}%", textposition="outside",
+                hovertemplate=f"{ct.name}<br>{ct.max_capacity_kg:.0f} kg capacity<br>"
+                              f"Fill rate: {ct.max_fill_rate_kg_per_hr:.0f} kg/hr<br>"
+                              f"Fleet share: %{{y:.1f}}%<extra></extra>",
+            ))
+        fig_fleet.update_layout(
+            height=320, showlegend=True, barmode="group",
+            yaxis=dict(title="Fleet share (%)", range=[0, 110]),
+            plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            margin=dict(l=50, r=20, t=40, b=40),
+        )
+        st.plotly_chart(fig_fleet, use_container_width=True)
+
+        # ── 2. Arrival probability distribution ─────────────────
+        st.subheader("Arrival Pattern")
+        hours = np.linspace(0, 24, 500)
+        rates = np.array([_pattern.rate_at_hour(h) for h in hours])
+        rate_sum = np.trapz(rates, hours)
+        pdf = rates / rate_sum * float(avg_arrivals)
+
+        fig_pdf = go.Figure()
+        fig_pdf.add_trace(go.Scatter(
+            x=hours, y=pdf, mode="lines",
+            line=dict(color="#333", width=2),
+            fill="tozeroy", fillcolor="rgba(33,150,243,0.12)",
+            name="Arrival rate",
+            hovertemplate="Hour: %{x:.1f}<br>Rate: %{y:.2f} /hr<extra></extra>",
+        ))
+        fig_pdf.update_layout(
+            height=320,
+            xaxis=dict(title="Hour of day", dtick=2, range=[0, 24]),
+            yaxis=dict(title="Expected arrivals / hr"),
+            title=f"Arrival distribution — {pattern_type} ({avg_arrivals:.1f} / day)",
+            plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+            margin=dict(l=50, r=20, t=50, b=40),
+        )
+        st.plotly_chart(fig_pdf, use_container_width=True)
+
+        # ── 3. Animated arrival scatter on the PDF ──────────────
+        st.subheader("Simulated Arrivals Preview")
+        n_preview_days = 7
+        rng = np.random.default_rng(42)
+        step_min = 1
+        steps_per_day = int(24 * 60 / step_min)
+        base_lam = float(avg_arrivals) / steps_per_day
+
+        arrival_hours_all = []
+        arrival_types_all = []
+        arrival_days_all  = []
+
+        for d in range(n_preview_days):
+            for s in range(steps_per_day):
+                hour = (s / steps_per_day) * 24
+                lam = base_lam * _pattern.rate_at_hour(hour)
+                n = rng.poisson(lam)
+                for _ in range(n):
+                    r = rng.random()
+                    cum = 0.0
+                    chosen = _containers[-1]
+                    for ct in _containers:
+                        cum += ct.fleet_fraction
+                        if r <= cum:
+                            chosen = ct
+                            break
+                    arrival_hours_all.append(hour)
+                    arrival_types_all.append(chosen.name)
+                    arrival_days_all.append(d + 1)
+
+        arrival_hours_all = np.array(arrival_hours_all)
+        arrival_types_all = np.array(arrival_types_all)
+        arrival_days_all  = np.array(arrival_days_all)
+
+        pdf_x = hours
+        pdf_y = pdf
+
+        base_traces = []
+        base_traces.append(go.Scatter(
+            x=pdf_x, y=pdf_y, mode="lines",
+            line=dict(color="#333", width=2),
+            fill="tozeroy", fillcolor="rgba(33,150,243,0.08)",
+            name="Arrival rate", showlegend=True,
+            hoverinfo="skip",
+        ))
+        for ct in _containers:
+            base_traces.append(go.Scatter(
+                x=[None], y=[None], mode="markers",
+                marker=dict(color=_type_colors[ct.name], size=8),
+                name=f"{ct.name} ({ct.max_capacity_kg:.0f} kg)",
+                showlegend=True,
+            ))
+
+        frames = []
+        for day in range(1, n_preview_days + 1):
+            mask = arrival_days_all <= day
+            scatter_traces = []
+            for ct in _containers:
+                ct_mask = mask & (arrival_types_all == ct.name)
+                y_jitter = rng.uniform(0, max(pdf_y) * 0.15, size=int(ct_mask.sum()))
+                scatter_traces.append(go.Scatter(
+                    x=arrival_hours_all[ct_mask],
+                    y=-y_jitter,
+                    mode="markers",
+                    marker=dict(color=_type_colors[ct.name], size=7, opacity=0.7,
+                                line=dict(width=0.5, color="white")),
+                    showlegend=False,
+                    hovertemplate=f"{ct.name}<br>Hour: %{{x:.1f}}<extra></extra>",
+                ))
+            frames.append(go.Frame(
+                data=[base_traces[0]] + list(base_traces[1:]) + scatter_traces,
+                name=f"Day {day}",
+                layout=go.Layout(title=f"Arrivals — Days 1–{day}  ({sum(arrival_days_all <= day)} containers)"),
+            ))
+
+        initial_scatters = []
+        for ct in _containers:
+            initial_scatters.append(go.Scatter(
+                x=[None], y=[None], mode="markers",
+                marker=dict(color=_type_colors[ct.name], size=7, opacity=0.7),
+                showlegend=False,
+            ))
+
+        fig_anim = go.Figure(
+            data=base_traces + initial_scatters,
+            frames=frames,
+        )
+        fig_anim.update_layout(
+            height=450,
+            xaxis=dict(title="Hour of day", dtick=2, range=[0, 24]),
+            yaxis=dict(title="Arrivals / hr", range=[-(max(pdf_y)*0.25), max(pdf_y) * 1.15]),
+            title=f"Arrivals — press ▶ to animate ({n_preview_days} days)",
+            plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            margin=dict(l=50, r=20, t=60, b=40),
+            updatemenus=[dict(
+                type="buttons", showactive=False,
+                x=0.0, xanchor="left", y=-0.12, yanchor="top",
+                buttons=[
+                    dict(label="▶ Play",
+                         method="animate",
+                         args=[None, dict(frame=dict(duration=800, redraw=True),
+                                          fromcurrent=True, mode="immediate")]),
+                    dict(label="⏸ Pause",
+                         method="animate",
+                         args=[[None], dict(frame=dict(duration=0, redraw=False),
+                                            mode="immediate")]),
+                ],
+            )],
+            sliders=[dict(
+                active=0, steps=[
+                    dict(args=[[f.name], dict(frame=dict(duration=800, redraw=True),
+                                              mode="immediate")],
+                         label=f"Day {i+1}", method="animate")
+                    for i, f in enumerate(frames)
+                ],
+                x=0.15, len=0.85, xanchor="left",
+                y=-0.08, yanchor="top",
+                currentvalue=dict(prefix="", visible=True),
+                transition=dict(duration=300),
+            )],
+        )
+        st.plotly_chart(fig_anim, use_container_width=True)
 
     with sub_single:
         st.header("Single Simulation Run")
