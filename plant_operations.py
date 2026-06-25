@@ -464,9 +464,6 @@ def run_simulation(container_types, plant, avg_arrivals_per_day, days, step_minu
             pm_active_log.append(False)
 
         is_manned = schedule.is_manned(step, N_step_day)
-
-
-            
         manned_log.append(int(is_manned))
 
         hour = ((step % N_step_day) / N_step_day) * 24

@@ -144,9 +144,12 @@ def run_economics(
     annual_staff_cost_kr = staff_annual_cost(schedule_label, staff_cost_overrides)
     staff_cost_kr_run    = annual_staff_cost_kr * (days / DAYS_PER_YEAR)
 
-    queue_cost_kr_run = unmanned_queue_cost_kr(
-        results, step_minutes, queue_cost_kr_per_hr
-    )
+    if schedule_label == "unmanned":
+        queue_cost_kr_run = unmanned_queue_cost_kr(
+            results, step_minutes, queue_cost_kr_per_hr
+        )
+    else:
+        queue_cost_kr_run = 0.0
 
     total_cost_kr_run = staff_cost_kr_run + queue_cost_kr_run
     net_kr_run        = revenue_kr - total_cost_kr_run
@@ -233,7 +236,6 @@ def add_economics_columns(
     )
 
     if "unmanned_queue_kg_hours" in df.columns:
-        # Exact: trailer-hours already restricted to unmanned steps.
         df["queue_cost_kr_annual"] = (
             queue_cost_kr_per_hr * df["unmanned_queue_kg_hours"] * (DAYS_PER_YEAR / df["days"])
         )
@@ -242,12 +244,10 @@ def add_economics_columns(
         df["queue_cost_kr_annual"] = (
             queue_cost_kr_per_hr * queue_kg_hours_per_day * DAYS_PER_YEAR
         )
-        # Schedules that are manned 100% of the time (e.g. "24/7" weekday
-        # hours with weekend open) never have an unmanned external queue,
-        # so the approximation should report zero queue cost for them.
-        _fully_manned = ["24_7", "8-16_closed", "8-20_closed", "8-24_closed",
-                         "8-16_open", "8-20_open", "8-24_open"]
-        df.loc[df["schedule_label"].isin(_fully_manned), "queue_cost_kr_annual"] = 0.0
+    # Queue cost only applies to "unmanned" schedule (drivers self-serve).
+    # Any manned schedule has no self-service overhead — during off-hours
+    # containers wait in the external queue but no docking occurs.
+    df.loc[df["schedule_label"] != "unmanned", "queue_cost_kr_annual"] = 0.0
 
     df["total_cost_kr_annual"] = df["staff_cost_kr_annual"] + df["queue_cost_kr_annual"]
     df["net_kr_annual"]        = df["revenue_kr_annual"] - df["total_cost_kr_annual"]
