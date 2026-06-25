@@ -889,7 +889,7 @@ with tab_ops:
         st.subheader("Arrival Pattern")
         hours = np.linspace(0, 24, 500)
         rates = np.array([_pattern.rate_at_hour(h) for h in hours])
-        rate_sum = np.trapz(rates, hours)
+        rate_sum = np.trapezoid(rates, hours)
         pdf = rates / rate_sum * float(avg_arrivals)
 
         fig_pdf = go.Figure()
