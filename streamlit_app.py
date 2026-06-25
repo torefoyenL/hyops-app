@@ -230,7 +230,7 @@ st.sidebar.title("⚙️ HyOps Configuration")
 # ── Topology ─────────────────────────────────────────────────
 with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
     topology_mode = st.selectbox("Topology lauout mode", ["Common Header at low and high pressure", "Common Header at low pressure, dedicated fill lines per compressor", "Seperate trains"])
-    if topology_mode == "Common Header at low and high Pressure":
+    if topology_mode == "Common Header at low and high pressure":
         n_ez            = st.slider("Electrolyzers", 1, 8, 3)
         stacks          = st.slider("Stacks per electrolyzer", 1, 4, 2)
         ez_kg_hr_each   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
