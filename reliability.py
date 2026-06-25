@@ -110,14 +110,16 @@ class WeibullPMUnit:
     """
 
     def __init__(self, beta, eta, mttr_corrective,
-                 pm_interval_h=None, pm_duration_h=0, pm_offset_h=0):
-        self.beta        = beta
-        self.eta         = eta
-        self.mttr_corr   = mttr_corrective
-        self.pm_interval = pm_interval_h
-        self.pm_duration = pm_duration_h
-        self.pm_offset   = pm_offset_h
-        self.pm_enabled  = pm_interval_h is not None
+                 pm_interval_h=None, pm_duration_h=0, pm_offset_h=0,
+                 pm_resets_age=True):
+        self.beta          = beta
+        self.eta           = eta
+        self.mttr_corr     = mttr_corrective
+        self.pm_interval   = pm_interval_h
+        self.pm_duration   = pm_duration_h
+        self.pm_offset     = pm_offset_h
+        self.pm_enabled    = pm_interval_h is not None
+        self.pm_resets_age = pm_resets_age
 
         self.age      = 0.0
         self.failed   = False
@@ -145,7 +147,8 @@ class WeibullPMUnit:
             if self._next_pm <= 0:
                 self.in_pm      = False
                 self.pm_count  += 1
-                self._reset_age()
+                if self.pm_resets_age:
+                    self._reset_age()
                 self._next_pm   = self.pm_interval
         elif self.failed:
             self._next_failure -= dt
@@ -257,13 +260,39 @@ DEFAULT_RELIABILITY_PARAMS = {
     "compressor_seals":   dict(beta=3.0, eta=20_000, mttr_corrective=48),
 }
 
-# Planned-maintenance defaults (annual, staggered across groups). Set
-# pm_interval_h=None on a unit to disable PM for it.
+# Per-node-type planned maintenance defaults. Stacks inherit from
+# electrolyzer_body (no separate entry). Old flat format (with top-level
+# "interval_h") is auto-converted by _normalize_pm_config().
 DEFAULT_PM = {
-    "interval_h":          8760,    # annual
-    "electrolyzer_duration_h": 72,
-    "compressor_duration_h":   96,
+    "electrolyzer_body": {"enabled": True, "interval_h": 8760, "duration_h": 72,  "resets_age": True},
+    "compressor_block":  {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
+    "compressor_motor":  {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
+    "compressor_seals":  {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
 }
+
+
+def _normalize_pm_config(pm_raw, enable_pm):
+    """Convert old flat or new per-node PM config to canonical form."""
+    if pm_raw is None:
+        pm_raw = {}
+
+    if "interval_h" in pm_raw:
+        interval = pm_raw["interval_h"]
+        ez_dur   = pm_raw.get("electrolyzer_duration_h", 72)
+        comp_dur = pm_raw.get("compressor_duration_h", 96)
+        return {
+            "electrolyzer_body": {"enabled": enable_pm, "interval_h": interval, "duration_h": ez_dur,   "resets_age": True},
+            "compressor_block":  {"enabled": enable_pm, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
+            "compressor_motor":  {"enabled": enable_pm, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
+            "compressor_seals":  {"enabled": enable_pm, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
+        }
+
+    merged = {}
+    for key in DEFAULT_PM:
+        merged[key] = {**DEFAULT_PM[key], **pm_raw.get(key, {})}
+        if not enable_pm:
+            merged[key]["enabled"] = False
+    return merged
 
 
 # ============================================================
@@ -314,21 +343,19 @@ class ReliabilityModel:
     def __init__(self, topology, random_seed: int = None,
                  reliability_params: dict = None, pm_config: dict = None,
                  enable_pm: bool = True,
-                 eq_lib: dict = None, bom: dict = None):
+                 eq_lib: dict = None, bom: dict = None,
+                 pm_offsets: dict = None):
         if random_seed is not None:
             random.seed(random_seed)
 
         params = DEFAULT_RELIABILITY_PARAMS if reliability_params is None \
             else {**DEFAULT_RELIABILITY_PARAMS, **reliability_params}
-        pm = DEFAULT_PM if pm_config is None else {**DEFAULT_PM, **pm_config}
+        pm = _normalize_pm_config(pm_config, enable_pm)
 
-        # Resolve equipment library and BOM — use module-level defaults if not
-        # supplied, so the caller can override either or both independently.
         _eq_lib = EQ_LIB if eq_lib is None else {**EQ_LIB, **eq_lib}
         _bom    = BOM    if bom    is None else {**BOM,    **bom}
 
         def _node_reliability(bom_name):
-            """Series BOM rollup using the resolved eq_lib."""
             b = _bom[bom_name]
             lam_total, weighted_mttr = 0.0, 0.0
             for eq_type, qty in b.items():
@@ -343,14 +370,6 @@ class ReliabilityModel:
         n_comp = topology.total_compressors()
         n_fill = topology.total_fill_lines()
 
-        # Per-electrolyzer stack count. In "common"/"pooled_ez_dedicated_comp"
-        # every electrolyzer shares topology.stacks_per_electrolyzer. In
-        # "trains", each Train can specify its own stacks_per_electrolyzer,
-        # so build the per-electrolyzer list by walking the trains in the
-        # same order plant_operations.HydrogenPlant does (train order, then
-        # electrolyzer order within each train) - this MUST stay in lockstep
-        # with that ordering, since ez_frac[i] is matched positionally
-        # against HydrogenPlant.electrolyzer_rated_kg_per_hr[i].
         if topology.mode == "trains":
             stacks_per_ez_list = []
             for train in topology.trains:
@@ -358,58 +377,76 @@ class ReliabilityModel:
         else:
             stacks_per_ez_list = [topology.stacks_per_electrolyzer] * n_ez
 
-        pm_interval = pm["interval_h"] if enable_pm else None
+        ez_offsets   = (pm_offsets or {}).get("ez", [])
+        comp_offsets = (pm_offsets or {}).get("comp", [])
 
-        # ---- Electrolyzers: body + stacks + aux, staggered PM offset ----
+        pm_ez  = pm["electrolyzer_body"]
+        pm_stk = pm.get("stack", pm_ez)
+
+        # ---- Electrolyzers: body + stacks + aux ----
         self.ez_bodies = []
-        self.ez_stacks = []   # list[list[unit]] - stacks_per_ez per electrolyzer
+        self.ez_stacks = []
         self.ez_aux    = []
         for i in range(n_ez):
-            # Round-robin into 2 PM groups (group A offset 0, group B
-            # offset half the interval) so EZ PM is staggered, same idea
-            # as RAM_simV2's Group A/B windows.
-            pm_off = 0 if (i % 2 == 0) else pm["interval_h"] / 2
+            if i < len(ez_offsets):
+                pm_off = ez_offsets[i]
+            else:
+                pm_off = 0 if (i % 2 == 0) else pm_ez["interval_h"] / 2
+
             self.ez_bodies.append(WeibullPMUnit(
                 **params["electrolyzer_body"],
-                pm_interval_h=pm_interval,
-                pm_duration_h=pm["electrolyzer_duration_h"],
+                pm_interval_h=pm_ez["interval_h"] if pm_ez["enabled"] else None,
+                pm_duration_h=pm_ez["duration_h"],
                 pm_offset_h=pm_off,
+                pm_resets_age=pm_ez["resets_age"],
             ))
             self.ez_stacks.append([
                 WeibullPMUnit(
                     **params["stack"],
-                    pm_interval_h=pm_interval,
-                    pm_duration_h=pm["electrolyzer_duration_h"],
+                    pm_interval_h=pm_stk["interval_h"] if pm_stk["enabled"] else None,
+                    pm_duration_h=pm_stk["duration_h"],
                     pm_offset_h=pm_off,
+                    pm_resets_age=pm_stk["resets_age"],
                 )
                 for _ in range(stacks_per_ez_list[i])
             ])
             self.ez_aux.append(ExpUnit(*_node_reliability("ez_aux")))
 
-        # ---- Compressors: block + motor + seals + aux, staggered PM ----
+        pm_cb = pm["compressor_block"]
+        pm_cm = pm["compressor_motor"]
+        pm_cs = pm["compressor_seals"]
+
+        # ---- Compressors: block + motor + seals + aux ----
         self.comp_block = []
         self.comp_motor = []
         self.comp_seals = []
         self.comp_aux   = []
         for j in range(n_comp):
-            pm_off = 0 if (j % 2 == 0) else pm["interval_h"] / 2
+            if j < len(comp_offsets):
+                pm_off = comp_offsets[j]
+            else:
+                pm_off = 0 if (j % 2 == 0) else pm_cb["interval_h"] / 2
+
             self.comp_block.append(WeibullPMUnit(
                 **params["compressor_block"],
-                pm_interval_h=pm_interval,
-                pm_duration_h=pm["compressor_duration_h"],
+                pm_interval_h=pm_cb["interval_h"] if pm_cb["enabled"] else None,
+                pm_duration_h=pm_cb["duration_h"],
                 pm_offset_h=pm_off,
+                pm_resets_age=pm_cb["resets_age"],
             ))
             self.comp_motor.append(WeibullPMUnit(
                 **params["compressor_motor"],
-                pm_interval_h=pm_interval,
-                pm_duration_h=pm["compressor_duration_h"],
+                pm_interval_h=pm_cm["interval_h"] if pm_cm["enabled"] else None,
+                pm_duration_h=pm_cm["duration_h"],
                 pm_offset_h=pm_off,
+                pm_resets_age=pm_cm["resets_age"],
             ))
             self.comp_seals.append(WeibullPMUnit(
                 **params["compressor_seals"],
-                pm_interval_h=pm_interval,
-                pm_duration_h=pm["compressor_duration_h"],
+                pm_interval_h=pm_cs["interval_h"] if pm_cs["enabled"] else None,
+                pm_duration_h=pm_cs["duration_h"],
                 pm_offset_h=pm_off,
+                pm_resets_age=pm_cs["resets_age"],
             ))
             self.comp_aux.append(ExpUnit(*_node_reliability("comp_aux")))
 
@@ -501,7 +538,8 @@ class ReliabilityModel:
 def run_reliability_timeline(topology, years: int = 10, random_seed: int = None,
                               reliability_params: dict = None, pm_config: dict = None,
                               enable_pm: bool = True,
-                              eq_lib: dict = None, bom: dict = None):
+                              eq_lib: dict = None, bom: dict = None,
+                              pm_offsets: dict = None):
     """
     Step a ReliabilityModel hourly for `years` years and return the plant
     CAPACITY history (fraction 0..1 of theoretical kg/hr) and a PM-active
@@ -532,6 +570,7 @@ def run_reliability_timeline(topology, years: int = 10, random_seed: int = None,
         topology, random_seed=random_seed,
         reliability_params=reliability_params, pm_config=pm_config,
         enable_pm=enable_pm, eq_lib=eq_lib, bom=bom,
+        pm_offsets=pm_offsets,
     )
 
     total_hours = years * 8760

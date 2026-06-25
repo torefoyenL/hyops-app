@@ -47,7 +47,12 @@ _RAM_DEFAULTS = {
     "cb_beta": 3.0, "cb_eta": 40000, "cb_mttr": 240,
     "cm_beta": 3.0, "cm_eta": 40000, "cm_mttr": 168,
     "cs_beta": 3.0, "cs_eta": 20000, "cs_mttr": 48,
-    "pm_interval_h": 8760, "pm_ez_dur": 72, "pm_comp_dur": 96,
+}
+_PM_DEFAULTS = {
+    "ez": {"enabled": True, "interval_h": 8760, "duration_h": 72,  "resets_age": True},
+    "cb": {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
+    "cm": {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
+    "cs": {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
 }
 _STAFF_DEFAULTS = {
     "unmanned": 0, "8-16_closed": 650_000, "8-20_closed": 950_000,
@@ -64,11 +69,12 @@ def _ss_init():
         "eq_lib":        {k: {"mtbf": v[0], "mttr": v[1]} for k, v in _EQ_LIB_DEFAULTS.items()},
         "bom":           {n: dict(c) for n, c in _BOM_DEFAULTS.items()},
         "ram_params":    dict(_RAM_DEFAULTS),
+        "pm_config":     {k: dict(v) for k, v in _PM_DEFAULTS.items()},
+        "pm_offsets":    {"ez": [], "comp": []},
         "staff_costs":   dict(_STAFF_DEFAULTS),
         "margin_kr":     30.0,
         "queue_cost_kr": 1500.0,
         "db_path":       "hydrogen_mc.duckdb",
-        # simulation results
         "tl_result":     None,
         "tl_seed_used":  None,
         "single_result": None,
@@ -77,6 +83,22 @@ def _ss_init():
     for k, v in defs.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+    # Migrate old flat PM keys to per-node format
+    rp = st.session_state.get("ram_params", {})
+    if "pm_interval_h" in rp:
+        if "pm_config" not in st.session_state or st.session_state["pm_config"] == {k: dict(v) for k, v in _PM_DEFAULTS.items()}:
+            interval = rp["pm_interval_h"]
+            ez_dur   = rp.get("pm_ez_dur", 72)
+            comp_dur = rp.get("pm_comp_dur", 96)
+            st.session_state["pm_config"] = {
+                "ez": {"enabled": True, "interval_h": interval, "duration_h": ez_dur,   "resets_age": True},
+                "cb": {"enabled": True, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
+                "cm": {"enabled": True, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
+                "cs": {"enabled": True, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
+            }
+        for k in ["pm_interval_h", "pm_ez_dur", "pm_comp_dur"]:
+            rp.pop(k, None)
 
 _ss_init()
 
@@ -94,12 +116,16 @@ def _build_ram_dicts():
         "compressor_motor":  dict(beta=p["cm_beta"],  eta=p["cm_eta"],  mttr_corrective=p["cm_mttr"]),
         "compressor_seals":  dict(beta=p["cs_beta"],  eta=p["cs_eta"],  mttr_corrective=p["cs_mttr"]),
     }
+    pm_ss = st.session_state["pm_config"]
     pm = {
-        "interval_h":              int(p["pm_interval_h"]),
-        "electrolyzer_duration_h": int(p["pm_ez_dur"]),
-        "compressor_duration_h":   int(p["pm_comp_dur"]),
+        "electrolyzer_body": dict(pm_ss["ez"]),
+        "compressor_block":  dict(pm_ss["cb"]),
+        "compressor_motor":  dict(pm_ss["cm"]),
+        "compressor_seals":  dict(pm_ss["cs"]),
     }
-    return params, pm, dict(st.session_state["eq_lib"]), dict(st.session_state["bom"])
+    offsets = st.session_state.get("pm_offsets", {"ez": [], "comp": []})
+    pm_offsets = offsets if (offsets.get("ez") or offsets.get("comp")) else None
+    return params, pm, dict(st.session_state["eq_lib"]), dict(st.session_state["bom"]), pm_offsets
 
 
 def make_schedule(label):
@@ -134,11 +160,11 @@ def make_arrival_pattern(ptype, ph, ph2, pw, pw2, pwt):
 def make_rel_model(topology, seed, reliability_on):
     if not reliability_on:
         return None
-    params, pm, eq_lib, bom = _build_ram_dicts()
+    params, pm, eq_lib, bom, pm_offsets = _build_ram_dicts()
     return rel.ReliabilityModel(
         topology, random_seed=int(seed),
         reliability_params=params, pm_config=pm,
-        eq_lib=eq_lib, bom=bom,
+        eq_lib=eq_lib, bom=bom, pm_offsets=pm_offsets,
     )
 
 
@@ -387,8 +413,9 @@ tab_plant, tab_ops, tab_econ, tab_data = st.tabs([
 # TAB 1 — Plant & RAM
 # ────────────────────────────────────────────────────────────
 with tab_plant:
-    sub_arch, sub_nodes, sub_tl, sub_fmea = st.tabs([
-        "🏗️ Architecture", "🔩 Nodes", "📉 Reliability Data & Timeline", "📋 FMEA",
+    sub_arch, sub_nodes, sub_pm_sched, sub_tl, sub_fmea = st.tabs([
+        "🏗️ Architecture", "🔩 Nodes", "🗓️ PM Scheduling",
+        "📉 Reliability Data & Timeline", "📋 FMEA",
     ])
 
     # ── Architecture ──────────────────────────────────────────
@@ -410,69 +437,75 @@ with tab_plant:
             "Auxiliary nodes are BOM rollups of exponential components from the Equipment Library."
         )
 
-        # Read from session_state, mutate a local copy, write back on change
         p = dict(st.session_state["ram_params"])
+        pm_cfg = {k: dict(v) for k, v in st.session_state["pm_config"].items()}
 
-        # ── Weibull nodes table ────────────────────────────────
+        # ── Weibull nodes + per-node PM ────────────────────────
         st.subheader("Weibull nodes")
-        st.caption("β = shape (>1 → wear-out),  η = characteristic life (h),  MTTR = corrective repair time (h)")
+        st.caption(
+            "β = shape (>1 → wear-out),  η = characteristic life (h),  "
+            "MTTR = corrective repair (h).  PM columns control planned maintenance per node type."
+        )
 
         _WB_NODES = [
-            ("Electrolyzer body", "ez",  "Housing, membrane assembly. Series with stacks and aux."),
-            ("Stack",             "stk", "One stack per EZ. 1-of-N needed → proportional derate."),
-            ("Compressor block",  "cb",  "Compressor main block. All of block + motor + seals must be up."),
-            ("Compressor motor",  "cm",  "Compressor drive motor."),
-            ("Compressor seals",  "cs",  "Seal system — faster wear, lower η."),
+            ("Electrolyzer body", "ez",  "Housing, membrane assembly. Series with stacks and aux.", "ez"),
+            ("Stack",             "stk", "One stack per EZ. 1-of-N needed → proportional derate.",  None),
+            ("Compressor block",  "cb",  "Compressor main block. All of block + motor + seals must be up.", "cb"),
+            ("Compressor motor",  "cm",  "Compressor drive motor.", "cm"),
+            ("Compressor seals",  "cs",  "Seal system — faster wear, lower η.", "cs"),
         ]
-        hdr = st.columns([3, 1, 1, 1])
+
+        hdr = st.columns([2.5, 0.8, 0.8, 0.8, 0.7, 1.0, 0.8, 0.7])
         hdr[0].markdown("**Node**")
         hdr[1].markdown("**β**")
         hdr[2].markdown("**η (h)**")
         hdr[3].markdown("**MTTR (h)**")
+        hdr[4].markdown("**PM**")
+        hdr[5].markdown("**Interval (h)**")
+        hdr[6].markdown("**Duration (h)**")
+        hdr[7].markdown("**Reset age**")
         st.divider()
-        for label, key, tooltip in _WB_NODES:
-            c0, c1, c2, c3 = st.columns([3, 1, 1, 1])
-            c0.markdown(f"**{label}**")
-            c0.caption(tooltip)
-            p[f"{key}_beta"] = c1.number_input("β", min_value=0.5, max_value=10.0,
+
+        for label, key, tooltip, pm_key in _WB_NODES:
+            cols = st.columns([2.5, 0.8, 0.8, 0.8, 0.7, 1.0, 0.8, 0.7])
+            cols[0].markdown(f"**{label}**")
+            cols[0].caption(tooltip)
+            p[f"{key}_beta"] = cols[1].number_input("β", min_value=0.5, max_value=10.0,
                 value=float(p[f"{key}_beta"]), step=0.1, format="%.1f",
                 key=f"ni_{key}_beta", label_visibility="collapsed")
-            p[f"{key}_eta"]  = c2.number_input("η", min_value=1000,
+            p[f"{key}_eta"]  = cols[2].number_input("η", min_value=1000,
                 value=int(p[f"{key}_eta"]),  step=1000,
                 key=f"ni_{key}_eta", label_visibility="collapsed")
-            p[f"{key}_mttr"] = c3.number_input("MTTR", min_value=1,
+            p[f"{key}_mttr"] = cols[3].number_input("MTTR", min_value=1,
                 value=int(p[f"{key}_mttr"]), step=8,
                 key=f"ni_{key}_mttr", label_visibility="collapsed")
+
+            if pm_key is not None:
+                node_pm = pm_cfg[pm_key]
+                node_pm["enabled"] = cols[4].toggle("On", value=node_pm["enabled"],
+                                                     key=f"pm_en_{pm_key}")
+                if node_pm["enabled"]:
+                    node_pm["interval_h"] = cols[5].number_input("Int", min_value=168,
+                        value=int(node_pm["interval_h"]), step=730,
+                        key=f"pm_int_{pm_key}", label_visibility="collapsed")
+                    node_pm["duration_h"] = cols[6].number_input("Dur", min_value=1,
+                        value=int(node_pm["duration_h"]), step=8,
+                        key=f"pm_dur_{pm_key}", label_visibility="collapsed")
+                    node_pm["resets_age"] = cols[7].toggle("Reset", value=node_pm["resets_age"],
+                                                            key=f"pm_reset_{pm_key}")
+                else:
+                    cols[5].caption("—")
+                    cols[6].caption("—")
+                    cols[7].caption("—")
+            else:
+                cols[4].caption("Shared")
+                cols[5].caption("with EZ")
+                cols[6].caption("body")
+                cols[7].caption("")
             st.divider()
 
-        # ── Planned Maintenance ────────────────────────────────
-        st.subheader("Planned Maintenance")
-        st.caption("Staggered across units: group A offset 0, group B offset interval/2.")
-        _unit_to_h = {"hours": 1, "days": 24, "weeks": 168, "months": 730, "years": 8760}
-
-        c1, c2 = st.columns(2)
-        pm_int_val  = c1.number_input("PM interval", min_value=1, value=1, step=1, key="ni_pm_int_val")
-        pm_int_unit = c2.selectbox("Unit##int", ["years","months","weeks","days","hours"],
-                                    key="ni_pm_int_unit", label_visibility="hidden")
-        p["pm_interval_h"] = int(pm_int_val * _unit_to_h[pm_int_unit])
-        c1.caption(f"= {p['pm_interval_h']:,} h")
-
-        c3, c4 = st.columns(2)
-        pm_ez_val  = c3.number_input("EZ PM duration", min_value=1, value=3, step=1, key="ni_pm_ez_val")
-        pm_ez_unit = c4.selectbox("Unit##ez", ["hours","days","weeks"],
-                                   index=1, key="ni_pm_ez_unit", label_visibility="hidden")
-        p["pm_ez_dur"] = int(pm_ez_val * _unit_to_h[pm_ez_unit])
-        c3.caption(f"= {p['pm_ez_dur']} h")
-
-        c5, c6 = st.columns(2)
-        pm_comp_val  = c5.number_input("Comp PM duration", min_value=1, value=4, step=1, key="ni_pm_comp_val")
-        pm_comp_unit = c6.selectbox("Unit##comp", ["hours","days","weeks"],
-                                     index=1, key="ni_pm_comp_unit", label_visibility="hidden")
-        p["pm_comp_dur"] = int(pm_comp_val * _unit_to_h[pm_comp_unit])
-        c5.caption(f"= {p['pm_comp_dur']} h")
-
-        # Write Weibull + PM back to session_state
         st.session_state["ram_params"] = p
+        st.session_state["pm_config"] = pm_cfg
 
         st.divider()
 
@@ -594,6 +627,131 @@ with tab_plant:
             st.session_state["eq_lib"] = eq
             st.rerun()
 
+    # ── PM Scheduling ─────────────────────────────────────────
+    with sub_pm_sched:
+        st.header("PM Scheduling & Offsets")
+        import numpy as np
+        import plotly.graph_objects as go
+
+        n_ez   = TOPOLOGY.total_electrolyzers()
+        n_comp = TOPOLOGY.total_compressors()
+        pm_cfg = st.session_state["pm_config"]
+
+        offsets = st.session_state.get("pm_offsets", {"ez": [], "comp": []})
+        if len(offsets.get("ez", [])) != n_ez:
+            offsets["ez"] = [0.0] * n_ez
+        if len(offsets.get("comp", [])) != n_comp:
+            offsets["comp"] = [0.0] * n_comp
+
+        auto_stagger = st.toggle("Use auto-stagger (A/B groups)", value=True,
+                                  key="pm_auto_stagger")
+
+        if auto_stagger:
+            ez_int  = pm_cfg["ez"]["interval_h"]
+            cb_int  = pm_cfg["cb"]["interval_h"]
+            for i in range(n_ez):
+                offsets["ez"][i] = 0.0 if (i % 2 == 0) else ez_int / 2
+            for j in range(n_comp):
+                offsets["comp"][j] = 0.0 if (j % 2 == 0) else cb_int / 2
+        else:
+            st.subheader("Electrolyzer offsets")
+            ez_cols = st.columns(min(n_ez, 4))
+            for i in range(n_ez):
+                with ez_cols[i % len(ez_cols)]:
+                    offsets["ez"][i] = float(st.number_input(
+                        f"EZ {i+1} offset (h)", min_value=0,
+                        value=int(offsets["ez"][i]), step=168,
+                        key=f"pm_off_ez_{i}"))
+            st.subheader("Compressor offsets")
+            comp_cols = st.columns(min(n_comp, 4))
+            for j in range(n_comp):
+                with comp_cols[j % len(comp_cols)]:
+                    offsets["comp"][j] = float(st.number_input(
+                        f"Comp {j+1} offset (h)", min_value=0,
+                        value=int(offsets["comp"][j]), step=168,
+                        key=f"pm_off_comp_{j}"))
+
+        st.session_state["pm_offsets"] = offsets
+
+        # ── PM Timeline Preview ───────────────────────────────
+        st.subheader("PM Timeline Preview")
+        preview_years = st.slider("Preview years", 1, 5, 2, key="pm_preview_years")
+        total_h = preview_years * 8760
+
+        fig_pm = go.Figure()
+        unit_labels = []
+        y_idx = 0
+        _PM_COL = "#2196F3"
+        _PM_COL_COMP = "#9C27B0"
+
+        def _add_windows(interval_h, duration_h, enabled, offset_h, y_pos, color):
+            if not enabled:
+                return
+            t = offset_h if offset_h > 0 else interval_h
+            while t < total_h:
+                fig_pm.add_shape(type="rect",
+                    x0=t, x1=min(t + duration_h, total_h),
+                    y0=y_pos - 0.35, y1=y_pos + 0.35,
+                    fillcolor=color, opacity=0.6, line_width=0)
+                t += interval_h
+
+        for i in range(n_ez):
+            y_idx += 1
+            unit_labels.append(f"EZ {i+1}")
+            _add_windows(pm_cfg["ez"]["interval_h"], pm_cfg["ez"]["duration_h"],
+                        pm_cfg["ez"]["enabled"], offsets["ez"][i], y_idx, _PM_COL)
+
+        for j in range(n_comp):
+            y_idx += 1
+            unit_labels.append(f"Comp {j+1}")
+            _add_windows(pm_cfg["cb"]["interval_h"], pm_cfg["cb"]["duration_h"],
+                        pm_cfg["cb"]["enabled"], offsets["comp"][j], y_idx, _PM_COL_COMP)
+
+        # Capacity overlay
+        cap_arr = np.ones(total_h)
+        for i in range(n_ez):
+            if pm_cfg["ez"]["enabled"]:
+                t = offsets["ez"][i] if offsets["ez"][i] > 0 else pm_cfg["ez"]["interval_h"]
+                while t < total_h:
+                    s, e = int(t), min(int(t + pm_cfg["ez"]["duration_h"]), total_h)
+                    cap_arr[s:e] -= 1.0 / max(n_ez, 1)
+                    t += pm_cfg["ez"]["interval_h"]
+        cap_arr = np.clip(cap_arr, 0, 1)
+
+        # Downsample for performance
+        ds = max(1, total_h // 2000)
+        cap_ds = cap_arr[::ds]
+        x_ds = np.arange(len(cap_ds)) * ds
+
+        fig_pm.add_trace(go.Scatter(
+            x=x_ds, y=cap_ds * 100, mode="lines",
+            line=dict(color="rgba(255,152,0,0.8)", width=1.5),
+            name="EZ capacity (%)", yaxis="y2",
+            hovertemplate="Hour %{x:,}<br>EZ capacity: %{y:.0f}%<extra></extra>",
+        ))
+
+        for y in range(1, preview_years + 1):
+            fig_pm.add_vline(x=y * 8760, line_color="#aaa", line_width=0.5, line_dash="dash")
+
+        fig_pm.update_layout(
+            height=max(300, y_idx * 45 + 120),
+            xaxis=dict(title="Hours", range=[0, total_h]),
+            yaxis=dict(tickvals=list(range(1, y_idx + 1)), ticktext=unit_labels,
+                      range=[0.3, y_idx + 0.7]),
+            yaxis2=dict(title="EZ capacity (%)", overlaying="y", side="right",
+                       range=[0, 110]),
+            plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+            margin=dict(l=80, r=60, t=30, b=50),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            hovermode="x",
+        )
+        st.plotly_chart(fig_pm, use_container_width=True)
+        st.caption(
+            "Blue bars = EZ planned maintenance windows. "
+            "Purple bars = compressor PM windows. "
+            "Orange line = approximate EZ production capacity during PM."
+        )
+
     # ── Reliability Timeline ───────────────────────────────────
     with sub_tl:
         st.header("Standalone Availability Timeline")
@@ -604,12 +762,12 @@ with tab_plant:
 
         if st.button("▶ Run timeline", type="primary", key="btn_tl"):
             # Capture all config at button-press time — not at render time
-            _params, _pm, _eq_lib, _bom = _build_ram_dicts()
+            _params, _pm, _eq_lib, _bom, _pm_offsets = _build_ram_dicts()
             with st.spinner("Running..."):
                 tl_result = rel.run_reliability_timeline(
                     TOPOLOGY, years=int(tl_years), random_seed=int(tl_seed),
                     reliability_params=_params, pm_config=_pm,
-                    eq_lib=_eq_lib, bom=_bom,
+                    eq_lib=_eq_lib, bom=_bom, pm_offsets=_pm_offsets,
                 )
             st.session_state["tl_result"]    = tl_result
             st.session_state["tl_seed_used"] = int(tl_seed)
