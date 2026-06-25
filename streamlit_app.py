@@ -88,18 +88,22 @@ def _ss_init():
     # Migrate old flat PM keys to per-node format
     rp = st.session_state.get("ram_params", {})
     if "pm_interval_h" in rp:
-        if "pm_config" not in st.session_state or st.session_state["pm_config"] == {k: dict(v) for k, v in _PM_DEFAULTS.items()}:
-            interval = rp["pm_interval_h"]
-            ez_dur   = rp.get("pm_ez_dur", 72)
-            comp_dur = rp.get("pm_comp_dur", 96)
-            st.session_state["pm_config"] = {
-                "ez": {"enabled": True, "interval_h": interval, "duration_h": ez_dur,   "resets_age": True},
-                "cb": {"enabled": True, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
-                "cm": {"enabled": True, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
-                "cs": {"enabled": True, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
-            }
+        interval = rp["pm_interval_h"]
+        ez_dur   = rp.get("pm_ez_dur", 72)
+        comp_dur = rp.get("pm_comp_dur", 96)
+        st.session_state["pm_config"] = {
+            "ez":  {"enabled": True, "interval_h": interval, "duration_h": ez_dur,   "resets_age": True},
+            "stk": {"enabled": True},
+            "cb":  {"enabled": True, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
+            "cm":  {"enabled": True, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
+            "cs":  {"enabled": True, "interval_h": interval, "duration_h": comp_dur, "resets_age": True},
+        }
         for k in ["pm_interval_h", "pm_ez_dur", "pm_comp_dur"]:
             rp.pop(k, None)
+
+    # Ensure "stk" key exists in pm_config (added after initial release)
+    if "pm_config" in st.session_state and "stk" not in st.session_state["pm_config"]:
+        st.session_state["pm_config"]["stk"] = {"enabled": True}
 
 _ss_init()
 
