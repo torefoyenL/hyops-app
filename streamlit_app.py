@@ -647,11 +647,21 @@ with tab_plant:
         pm_cfg = st.session_state["pm_config"]
         ez_pm  = pm_cfg["ez"]
         cb_pm  = pm_cfg["cb"]
+        cm_pm  = pm_cfg["cm"]
+        cs_pm  = pm_cfg["cs"]
+
+        # Collect all enabled compressor sub-component PM configs
+        _comp_pms = []
+        if cb_pm["enabled"]: _comp_pms.append(("block", cb_pm))
+        if cm_pm["enabled"]: _comp_pms.append(("motor", cm_pm))
+        if cs_pm["enabled"]: _comp_pms.append(("seals", cs_pm))
+        # Unique intervals across enabled sub-components
+        _comp_intervals = sorted({p["interval_h"] for _, p in _comp_pms})
 
         st.caption(
             "Electrolyzers and compressors are taken down **sequentially** — "
             "one at a time, so capacity is reduced by 1/N during each PM window. "
-            "Set the gap between consecutive PMs to spread the impact."
+            "Compressor sub-components with different intervals get separate PM windows."
         )
 
         c1, c2 = st.columns(2)
@@ -665,8 +675,6 @@ with tab_plant:
         # Compute sequential offsets
         ez_dur  = ez_pm["duration_h"]
         ez_int  = ez_pm["interval_h"]
-        cb_dur  = cb_pm["duration_h"]
-        cb_int  = cb_pm["interval_h"]
         ez_step = ez_dur + gap_h
 
         offsets = {"ez": [], "comp": []}
@@ -675,11 +683,11 @@ with tab_plant:
 
         if pair_comp:
             for j in range(n_comp):
-                paired_ez = j % n_ez
-                offsets["comp"].append(offsets["ez"][paired_ez])
+                offsets["comp"].append(offsets["ez"][j % n_ez])
         else:
-            comp_start = ez_int + n_ez * ez_step + gap_h
-            comp_step  = cb_dur + gap_h
+            longest_dur = max((p["duration_h"] for _, p in _comp_pms), default=96)
+            comp_start  = ez_int + n_ez * ez_step + gap_h
+            comp_step   = longest_dur + gap_h
             for j in range(n_comp):
                 offsets["comp"].append(float(comp_start + j * comp_step))
 
@@ -687,12 +695,13 @@ with tab_plant:
 
         # Summary
         total_seq = n_ez * ez_step - gap_h
+        comp_info = ", ".join(f"{name} every {p['interval_h']:,} h" for name, p in _comp_pms)
         st.info(
             f"**EZ sequence:** {n_ez} × {ez_dur:.0f} h PM + {gap_h:.0f} h gap = "
             f"**{total_seq:.0f} h** total ({total_seq/24:.0f} days).  \n"
-            f"Capacity during each EZ PM: **{(1 - 1/max(n_ez,1))*100:.0f}%**"
-            + (f"  \n**Compressor:** paired with EZ — Comp {j+1} goes down with EZ {j%n_ez+1}" if pair_comp
-               else f"  \n**Compressor:** separate sequence after EZ, starting at hour {offsets['comp'][0]:,.0f}")
+            f"Capacity during each EZ PM: **{(1 - 1/max(n_ez,1))*100:.0f}%**  \n"
+            f"**Compressor PM:** {comp_info or 'all disabled'}"
+            + (f"  — paired with EZ" if pair_comp else f"  — separate sequence")
         )
 
         # ── PM Timeline Preview ───────────────────────────────
@@ -704,30 +713,31 @@ with tab_plant:
         unit_labels = []
         y_idx = 0
 
-        def _add_windows(interval_h, duration_h, enabled, offset_h, y_pos, color):
-            if not enabled:
-                return
+        def _add_windows(interval_h, duration_h, offset_h, y_pos, color, opacity=0.6):
             t = offset_h
             while t < total_h:
                 fig_pm.add_shape(type="rect",
                     x0=t, x1=min(t + duration_h, total_h),
                     y0=y_pos - 0.35, y1=y_pos + 0.35,
-                    fillcolor=color, opacity=0.6, line_width=0)
+                    fillcolor=color, opacity=opacity, line_width=0)
                 t += interval_h
 
         for i in range(n_ez):
             y_idx += 1
             unit_labels.append(f"EZ {i+1}")
-            _add_windows(ez_int, ez_dur, ez_pm["enabled"],
-                        offsets["ez"][i], y_idx, "#2196F3")
+            if ez_pm["enabled"]:
+                _add_windows(ez_int, ez_dur, offsets["ez"][i], y_idx, "#2196F3")
 
+        _COMP_COLORS = {"block": "#9C27B0", "motor": "#E91E63", "seals": "#FF5722"}
         for j in range(n_comp):
             y_idx += 1
             unit_labels.append(f"Comp {j+1}")
-            _add_windows(cb_int, cb_dur, cb_pm["enabled"],
-                        offsets["comp"][j], y_idx, "#9C27B0")
+            off = offsets["comp"][j]
+            for name, cpm in _comp_pms:
+                _add_windows(cpm["interval_h"], cpm["duration_h"], off, y_idx,
+                            _COMP_COLORS.get(name, "#9C27B0"))
 
-        # Capacity overlay — EZ + comp combined
+        # Capacity overlay — any sub-component in PM takes the compressor offline
         cap_ez   = np.ones(total_h)
         cap_comp = np.ones(total_h)
         for i in range(n_ez):
@@ -737,13 +747,19 @@ with tab_plant:
                     s, e = int(t), min(int(t + ez_dur), total_h)
                     cap_ez[s:e] -= 1.0 / max(n_ez, 1)
                     t += ez_int
+
+        comp_down = np.zeros(total_h, dtype=bool)
         for j in range(n_comp):
-            if cb_pm["enabled"]:
-                t = offsets["comp"][j]
+            unit_down = np.zeros(total_h, dtype=bool)
+            off = offsets["comp"][j]
+            for _, cpm in _comp_pms:
+                t = off
                 while t < total_h:
-                    s, e = int(t), min(int(t + cb_dur), total_h)
-                    cap_comp[s:e] -= 1.0 / max(n_comp, 1)
-                    t += cb_int
+                    s, e = int(t), min(int(t + cpm["duration_h"]), total_h)
+                    unit_down[s:e] = True
+                    t += cpm["interval_h"]
+            cap_comp[unit_down] -= 1.0 / max(n_comp, 1)
+
         cap_plant = np.clip(np.minimum(cap_ez, cap_comp), 0, 1)
 
         ds = max(1, total_h // 2000)
@@ -759,6 +775,15 @@ with tab_plant:
             name="Plant capacity (%)", yaxis="y2",
             hovertemplate="Hour %{x:,}<br>Plant capacity: %{y:.0f}%<extra></extra>",
         ))
+
+        # Legend for comp sub-components
+        for name, color in _COMP_COLORS.items():
+            if any(n == name for n, _ in _comp_pms):
+                fig_pm.add_trace(go.Scatter(
+                    x=[None], y=[None], mode="markers",
+                    marker=dict(size=10, color=color), name=f"Comp {name}",
+                    yaxis="y2", showlegend=True,
+                ))
 
         for y in range(1, preview_years + 1):
             fig_pm.add_vline(x=y * 8760, line_color="#aaa", line_width=0.5, line_dash="dash",

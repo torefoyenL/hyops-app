@@ -292,6 +292,10 @@ def _normalize_pm_config(pm_raw, enable_pm):
         merged[key] = {**DEFAULT_PM[key], **pm_raw.get(key, {})}
         if not enable_pm:
             merged[key]["enabled"] = False
+    if "stack" in pm_raw:
+        merged["stack"] = {**merged["electrolyzer_body"], **pm_raw["stack"]}
+        if not enable_pm:
+            merged["stack"]["enabled"] = False
     return merged
 
 
