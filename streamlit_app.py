@@ -75,7 +75,7 @@ def _ss_init():
         "staff_costs":   dict(_STAFF_DEFAULTS),
         "margin_kr":     30.0,
         "queue_cost_kr": 1500.0,
-        "container_cost_monthly": 0.0,
+        "container_costs_monthly": {"Type-A": 0.0, "Type-B": 0.0, "Type-C": 0.0},
         "db_path":       "hydrogen_mc.duckdb",
         "tl_mc_results": None,
         "single_result": None,
@@ -377,17 +377,23 @@ with st.sidebar.expander("💰 Cost & Revenue", expanded=False):
     queue_cost_kr_per_hr = st.number_input("Passive trailer queue cost (kr/trailer-hr)", 0.0,
                                             value=float(st.session_state["queue_cost_kr"]), step=50.0,
                                             help="Cost per trailer-hour in external queue — unmanned schedule only")
-    container_cost_monthly = st.number_input("Passive container cost (kr/month)", 0.0,
-                                              value=float(st.session_state.get("container_cost_monthly", 0.0)),
-                                              step=1000.0,
-                                              help="Monthly rental/opportunity cost per container at the plant — applies to all schedules")
-    container_cost_kr_per_hr = container_cost_monthly / 730.0
-    st.caption(f"= {container_cost_kr_per_hr:.2f} kr/container-hour")
+    st.caption("**Passive container cost (kr/month per container)**")
+    _cc = st.session_state.get("container_costs_monthly", {"Type-A": 0.0, "Type-B": 0.0, "Type-C": 0.0})
+    cc1, cc2, cc3 = st.columns(3)
+    _cc["Type-A"] = cc1.number_input("Type-A (1000 kg)", 0.0, value=float(_cc["Type-A"]), step=500.0, key="cc_a")
+    _cc["Type-B"] = cc2.number_input("Type-B (600 kg)",  0.0, value=float(_cc["Type-B"]), step=500.0, key="cc_b")
+    _cc["Type-C"] = cc3.number_input("Type-C (300 kg)",  0.0, value=float(_cc["Type-C"]), step=500.0, key="cc_c")
+    st.session_state["container_costs_monthly"] = _cc
+    _fracs = make_container_types(frac_a, frac_b, frac_c)
+    container_cost_kr_per_hr = sum(
+        ct.fleet_fraction * _cc.get(ct.name, 0.0) / 730.0 for ct in _fracs
+    )
+    if container_cost_kr_per_hr > 0:
+        st.caption(f"Weighted avg = {container_cost_kr_per_hr:.2f} kr/container-hour")
     if margin_kr_per_kg != st.session_state["margin_kr"]:
         st.session_state["margin_kr"] = margin_kr_per_kg
     if queue_cost_kr_per_hr != st.session_state["queue_cost_kr"]:
         st.session_state["queue_cost_kr"] = queue_cost_kr_per_hr
-    st.session_state["container_cost_monthly"] = container_cost_monthly
     st.caption("Annual staff cost per schedule (kr/year)")
     staff_costs = {}
     for lbl, default_v in _STAFF_DEFAULTS.items():
