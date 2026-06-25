@@ -877,36 +877,117 @@ with tab_plant:
             with tl_hourly:
                 roll_w = roll_days * 24
                 roll = np.convolve(cap, np.ones(roll_w)/roll_w, mode="same") if len(cap) >= roll_w else cap
-                fig = go.Figure()
-                for lo, hi, label in BANDS:
-                    mask   = (cap >= lo) & (cap < hi + 0.001)
-                    filled = np.where(mask, cap * 100, np.nan)
-                    fig.add_trace(go.Scatter(
-                        x=years_ax, y=filled, fill="tozeroy", mode="none",
-                        fillcolor=BAND_COLORS[label], opacity=0.55, name=label,
-                        hovertemplate=f"{label}<br>Year: %{{x:.2f}}<br>Capacity: %{{y:.1f}}%<extra></extra>",
-                    ))
-                pm_starts = np.where(np.diff(pm_hist.astype(int)) == 1)[0]
-                pm_ends   = np.where(np.diff(pm_hist.astype(int)) == -1)[0]
-                if pm_hist[0]:  pm_starts = np.concatenate([[0], pm_starts])
-                if pm_hist[-1]: pm_ends   = np.concatenate([pm_ends, [len(pm_hist)-1]])
-                for s_i, e_i in zip(pm_starts[:50], pm_ends[:50]):
-                    fig.add_vrect(x0=years_ax[s_i], x1=years_ax[min(e_i, len(years_ax)-1)],
-                                  fillcolor="#2196F3", opacity=0.10, layer="below", line_width=0)
+
+                # Separate PM vs failure downtime per hour
+                down = cap < 1.0
+                pm_down   = down & pm_hist
+                fail_down = down & ~pm_hist
+
+                _n_ez_tl   = TOPOLOGY.total_electrolyzers()
+                _n_comp_tl = TOPOLOGY.total_compressors()
+                n_pm_rows  = _n_ez_tl + _n_comp_tl
+
+                fig = make_subplots(
+                    rows=3, cols=1, shared_xaxes=True,
+                    row_heights=[0.55, 0.15, 0.30],
+                    vertical_spacing=0.04,
+                    subplot_titles=("Plant Capacity", "PM Schedule (per unit)", "Downtime Classification"),
+                )
+
+                # ── Row 1: Capacity timeline ──────────────────
+                fig.add_trace(go.Scatter(
+                    x=years_ax, y=cap * 100, mode="lines",
+                    line=dict(color="rgba(30,30,30,0.15)", width=0.5),
+                    name="Hourly capacity", showlegend=False,
+                    hovertemplate="Year %{x:.2f}<br>Capacity: %{y:.1f}%<extra></extra>",
+                ), row=1, col=1)
                 fig.add_trace(go.Scatter(
                     x=years_ax, y=roll * 100, mode="lines",
-                    line=dict(color="#1a1a2e", width=1.5), name=f"{roll_days}d rolling mean",
-                    hovertemplate="Year: %{x:.2f}<br>Rolling avg: %{y:.1f}%<extra></extra>",
-                ))
+                    line=dict(color="#1a1a2e", width=2), name=f"{roll_days}d rolling mean",
+                    hovertemplate="Year %{x:.2f}<br>Rolling avg: %{y:.1f}%<extra></extra>",
+                ), row=1, col=1)
+                fig.add_hline(y=overall, line_dash="dot", line_color="#999",
+                              annotation_text=f"Mean {overall:.1f}%",
+                              annotation_position="top right", row=1, col=1)
+
+                # ── Row 2: PM schedule strips ─────────────────
+                _pm_offsets_tl = st.session_state.get("pm_offsets", {"ez": [], "comp": []})
+                _pm_cfg_tl = st.session_state["pm_config"]
+                _strip_h = 0.8 / max(n_pm_rows, 1)
+
+                for i in range(_n_ez_tl):
+                    if _pm_cfg_tl["ez"]["enabled"]:
+                        off = _pm_offsets_tl["ez"][i] if i < len(_pm_offsets_tl.get("ez", [])) else 0
+                        interval = _pm_cfg_tl["ez"]["interval_h"]
+                        dur = _pm_cfg_tl["ez"]["duration_h"]
+                        t = off if off > 0 else interval
+                        y_pos = 1.0 - i * _strip_h - _strip_h / 2
+                        while t < len(cap):
+                            fig.add_shape(type="rect",
+                                x0=t/8760, x1=min(t+dur, len(cap))/8760,
+                                y0=y_pos - _strip_h*0.4, y1=y_pos + _strip_h*0.4,
+                                fillcolor="#2196F3", opacity=0.7, line_width=0,
+                                xref="x2", yref="y2")
+                            t += interval
+
+                for j in range(_n_comp_tl):
+                    off = _pm_offsets_tl["comp"][j] if j < len(_pm_offsets_tl.get("comp", [])) else 0
+                    y_pos = 1.0 - (_n_ez_tl + j) * _strip_h - _strip_h / 2
+                    for ckey in ["cb", "cm", "cs"]:
+                        cpm = _pm_cfg_tl.get(ckey, {})
+                        if cpm.get("enabled", False):
+                            interval = cpm["interval_h"]
+                            dur = cpm["duration_h"]
+                            t = off if off > 0 else interval
+                            _ccol = {"cb": "#9C27B0", "cm": "#E91E63", "cs": "#FF5722"}[ckey]
+                            while t < len(cap):
+                                fig.add_shape(type="rect",
+                                    x0=t/8760, x1=min(t+dur, len(cap))/8760,
+                                    y0=y_pos - _strip_h*0.4, y1=y_pos + _strip_h*0.4,
+                                    fillcolor=_ccol, opacity=0.7, line_width=0,
+                                    xref="x2", yref="y2")
+                                t += interval
+
+                pm_labels = [f"EZ{i+1}" for i in range(_n_ez_tl)] + [f"C{j+1}" for j in range(_n_comp_tl)]
+                pm_ticks  = [1.0 - k * _strip_h - _strip_h/2 for k in range(n_pm_rows)]
+                fig.update_yaxes(
+                    tickvals=pm_ticks, ticktext=pm_labels, range=[0, 1.1],
+                    tickfont=dict(size=9), row=2, col=1,
+                )
+
+                # ── Row 3: Downtime classification ────────────
+                # Downsample for performance
+                ds = max(1, len(cap) // 4000)
+                x_ds = years_ax[::ds]
+                pm_frac   = np.array([pm_down[i*ds:min((i+1)*ds, len(cap))].mean()
+                                      for i in range(len(x_ds))]) * 100
+                fail_frac = np.array([fail_down[i*ds:min((i+1)*ds, len(cap))].mean()
+                                      for i in range(len(x_ds))]) * 100
+
+                fig.add_trace(go.Scatter(
+                    x=x_ds, y=pm_frac, mode="lines", fill="tozeroy",
+                    line=dict(color="#2196F3", width=0), fillcolor="rgba(33,150,243,0.5)",
+                    name="PM downtime",
+                    hovertemplate="Year %{x:.2f}<br>PM: %{y:.0f}%<extra></extra>",
+                ), row=3, col=1)
+                fig.add_trace(go.Scatter(
+                    x=x_ds, y=pm_frac + fail_frac, mode="lines", fill="tonexty",
+                    line=dict(color="#E24B4A", width=0), fillcolor="rgba(226,75,74,0.5)",
+                    name="Failure downtime",
+                    hovertemplate="Year %{x:.2f}<br>Failure: %{y:.0f}%<extra></extra>",
+                ), row=3, col=1)
+
                 for y in range(1, n_years + 1):
-                    fig.add_vline(x=y, line_color="#aaaaaa", line_width=0.5, line_dash="dash")
+                    fig.add_vline(x=y, line_color="#ccc", line_width=0.5, line_dash="dash")
+
                 fig.update_layout(
-                    height=420,
-                    xaxis=dict(title="Year", tickmode="linear", dtick=1,
-                               rangeslider=dict(visible=True, thickness=0.06)),
-                    yaxis=dict(title="Plant capacity (%)", range=[0, 108]),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                    margin=dict(l=50, r=20, t=40, b=60),
+                    height=650,
+                    xaxis3=dict(title="Year", tickmode="linear", dtick=1,
+                                rangeslider=dict(visible=True, thickness=0.04)),
+                    yaxis=dict(title="Capacity (%)", range=[0, 108]),
+                    yaxis3=dict(title="Downtime (%)", range=[0, max(15, (pm_frac+fail_frac).max()*1.3)]),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                    margin=dict(l=55, r=20, t=50, b=60),
                     hovermode="x unified", plot_bgcolor="#F8F7F4", paper_bgcolor="white",
                 )
                 st.plotly_chart(fig, use_container_width=True)
