@@ -1192,9 +1192,10 @@ with tab_plant:
                 st.caption("Mean realised MTBF across seeds vs Weibull η parameter.")
                 sim_hours = n_years * 8760
                 p = st.session_state["ram_params"]
-                def _mtbf_mc(label, fn, eta):
-                    per_seed_f = [sum(fn(r["model"])) for r in mc_results]
-                    n_units = len(fn(mc_results[0]["model"]))
+                def _mtbf_mc(label, get_units, eta):
+                    units_per_seed = [get_units(r["model"]) for r in mc_results]
+                    n_units = len(units_per_seed[0])
+                    per_seed_f = [sum(u.failures for u in units) for units in units_per_seed]
                     mean_f = np.mean(per_seed_f)
                     realised = (n_units * sim_hours) / mean_f if mean_f > 0 else float("inf")
                     return {"Component": label, "Units": n_units,
