@@ -456,7 +456,7 @@ with tab_plant:
         _WB_NODES = [
             ("Electrolyzer body", "ez",  "Housing, membrane assembly. Series with stacks and aux.", "ez"),
             ("Stack",             "stk", "One stack per EZ. 1-of-N needed → proportional derate.",  "stk"),
-            ("Compressor block",  "cb",  "Compressor main block. All of block + motor + seals must be up.", "cb"),
+            ("Compressor block",  "cb",  "Compressor main block.", "cb"),
             ("Compressor motor",  "cm",  "Compressor drive motor.", "cm"),
             ("Compressor seals",  "cs",  "Seal system — faster wear, lower η.", "cs"),
         ]
@@ -527,9 +527,9 @@ with tab_plant:
         eq  = st.session_state["eq_lib"]
 
         _NODE_LABELS = {
-            "ez_aux":        "EZ Aux — instrumentation & valves on each electrolyzer",
-            "comp_aux":      "Comp Aux — instrumentation & rotating equipment on each compressor",
-            "fill_line_aux": "Fill Line Aux — valves & instrumentation per fill line",
+            "ez_aux":        "EZ Aux — equipment between electrolyzer and compressor, may include equipment in electrolyzer body",
+            "comp_aux":      "Comp Aux — equipment between compressor and fill lines, may include equipment in compressor",
+            "fill_line_aux": "Fill Line",
         }
         bom_dirty = False
         for node_key, node_label in _NODE_LABELS.items():
