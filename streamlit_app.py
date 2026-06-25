@@ -76,8 +76,7 @@ def _ss_init():
         "margin_kr":     30.0,
         "queue_cost_kr": 1500.0,
         "db_path":       "hydrogen_mc.duckdb",
-        "tl_result":     None,
-        "tl_seed_used":  None,
+        "tl_mc_results": None,
         "single_result": None,
         "fmea_df":       None,
     }
@@ -805,447 +804,410 @@ with tab_plant:
 
     # ── Reliability Timeline ───────────────────────────────────
     with sub_tl:
-        st.header("Standalone Availability Timeline")
-        c1, c2, c3 = st.columns(3)
+        st.header("Reliability Data & Timeline")
+        c1, c2, c3, c4 = st.columns(4)
         tl_years  = c1.slider("Years to simulate", 1, 20, 10, key="tl_years")
-        tl_seed   = c2.number_input("Random seed", min_value=0, value=99, step=1, key="tl_seed")
-        roll_days = c3.slider("Rolling avg (days)", 1, 90, 30, key="tl_roll")
+        tl_seed   = c2.number_input("Base seed", min_value=0, value=99, step=1, key="tl_seed")
+        tl_nseeds = c3.slider("MC seeds", 1, 50, 10, key="tl_nseeds")
+        roll_days = c4.slider("Rolling avg (days)", 1, 90, 30, key="tl_roll")
 
         if st.button("▶ Run timeline", type="primary", key="btn_tl"):
-            # Capture all config at button-press time — not at render time
             _params, _pm, _eq_lib, _bom, _pm_offsets = _build_ram_dicts()
-            with st.spinner("Running..."):
-                tl_result = rel.run_reliability_timeline(
-                    TOPOLOGY, years=int(tl_years), random_seed=int(tl_seed),
-                    reliability_params=_params, pm_config=_pm,
-                    eq_lib=_eq_lib, bom=_bom, pm_offsets=_pm_offsets,
-                )
-            st.session_state["tl_result"]    = tl_result
-            st.session_state["tl_seed_used"] = int(tl_seed)
+            mc_results = []
+            with st.spinner(f"Running {int(tl_nseeds)} seeds..."):
+                for si in range(int(tl_nseeds)):
+                    r = rel.run_reliability_timeline(
+                        TOPOLOGY, years=int(tl_years),
+                        random_seed=int(tl_seed) + si,
+                        reliability_params=_params, pm_config=_pm,
+                        eq_lib=_eq_lib, bom=_bom, pm_offsets=_pm_offsets,
+                    )
+                    mc_results.append(r)
+            st.session_state["tl_mc_results"] = mc_results
 
-        if st.session_state["tl_result"] is not None:
+        if st.session_state.get("tl_mc_results") is not None:
             import numpy as np
             import plotly.graph_objects as go
             from plotly.subplots import make_subplots
+            import pandas as pd
 
-            tl       = st.session_state["tl_result"]
-            cap      = np.array(tl["capacity_history"])
-            pm_hist  = np.array(tl["pm_history"], dtype=bool)
-            n_years  = len(cap) // 8760
-            years_ax = np.arange(len(cap)) / 8760
+            mc_results = st.session_state["tl_mc_results"]
+            n_seeds   = len(mc_results)
+            all_cap   = np.array([r["capacity_history"] for r in mc_results])
+            all_pm    = np.array([r["pm_history"] for r in mc_results], dtype=bool)
+            n_years   = all_cap.shape[1] // 8760
+            years_ax  = np.arange(all_cap.shape[1]) / 8760
+
+            cap_mean = all_cap.mean(axis=0)
+            cap_p10  = np.percentile(all_cap, 10, axis=0)
+            cap_p90  = np.percentile(all_cap, 90, axis=0)
+            overall  = cap_mean.mean() * 100
 
             BAND_COLORS = {
-                "100%":   "#1D9E75",
-                "75-99%": "#639922",
-                "50-74%": "#EF9F27",
-                "25-49%": "#D85A30",
-                "0-24%":  "#E24B4A",
+                "100%": "#1D9E75", "75-99%": "#639922", "50-74%": "#EF9F27",
+                "25-49%": "#D85A30", "0-24%": "#E24B4A",
             }
-            BANDS = [
-                (1.00, 1.01, "100%"),
-                (0.75, 1.00, "75-99%"),
-                (0.50, 0.75, "50-74%"),
-                (0.25, 0.50, "25-49%"),
-                (0.00, 0.25, "0-24%"),
-            ]
 
-            overall = cap.mean() * 100
-            n_zero  = int((cap == 0).sum())
-            n_deg   = int(((cap > 0) & (cap < 1)).sum())
-            n_pm    = int(pm_hist.sum())
+            # Aggregate metrics across seeds
+            seed_avails = [c.mean() * 100 for c in all_cap]
+            seed_zeros  = [(c == 0).sum() for c in all_cap]
+            seed_degs   = [((c > 0) & (c < 1)).sum() for c in all_cap]
+            seed_pms    = [p.sum() for p in all_pm]
 
             k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Mean availability", f"{overall:.2f}%")
-            k2.metric("Zero-output hours", f"{n_zero:,} h")
-            k3.metric("Degraded hours",    f"{n_deg:,} h")
-            k4.metric("Hours in PM",       f"{n_pm:,} h")
+            k1.metric("Mean availability", f"{np.mean(seed_avails):.2f}%",
+                      delta=f"P10: {np.percentile(seed_avails,10):.1f}%  P90: {np.percentile(seed_avails,90):.1f}%")
+            k2.metric("Zero-output hours", f"{np.mean(seed_zeros):,.0f} h",
+                      delta=f"± {np.std(seed_zeros):,.0f}")
+            k3.metric("Degraded hours", f"{np.mean(seed_degs):,.0f} h",
+                      delta=f"± {np.std(seed_degs):,.0f}")
+            k4.metric("Hours in PM", f"{np.mean(seed_pms):,.0f} h")
+            st.caption(f"Statistics averaged over **{n_seeds} seeds** (base seed {int(tl_seed)})")
 
-            with st.expander("Failure summary"):
-                s = tl["model"].summary()
+            with st.expander("Failure summary (mean across seeds)"):
+                summaries = [r["model"].summary() for r in mc_results]
                 sc1, sc2, sc3, sc4, sc5 = st.columns(5)
-                sc1.metric("EZ failures",       s["electrolyzer_failures"])
-                sc2.metric("Stack failures",     s["stack_failures"])
-                sc3.metric("Comp failures",      s["compressor_failures"])
-                sc4.metric("Fill line failures", s["fill_line_failures"])
-                sc5.metric("PM events",          s["pm_events"])
+                sc1.metric("EZ failures",       f"{np.mean([s['electrolyzer_failures'] for s in summaries]):.1f}")
+                sc2.metric("Stack failures",     f"{np.mean([s['stack_failures'] for s in summaries]):.1f}")
+                sc3.metric("Comp failures",      f"{np.mean([s['compressor_failures'] for s in summaries]):.1f}")
+                sc4.metric("Fill line failures", f"{np.mean([s['fill_line_failures'] for s in summaries]):.1f}")
+                sc5.metric("PM events",          f"{np.mean([s['pm_events'] for s in summaries]):.1f}")
 
             tl_hourly, tl_monthly, tl_yearly, tl_exceed, tl_bands, tl_pmvsfail, tl_compfail = st.tabs([
                 "📈 Hourly", "📅 Monthly avg", "📊 Yearly bars", "📉 Exceedance",
                 "🟩 Capacity Bands", "🔧 PM vs Failures", "⚙️ Component Failures",
             ])
 
+            # ── Hourly: single seed view ──────────────────────
             with tl_hourly:
-                roll_w = roll_days * 24
+                view_seed = st.selectbox("Seed to display",
+                    list(range(n_seeds)),
+                    format_func=lambda i: f"Seed {int(tl_seed)+i}",
+                    key="tl_view_seed")
+                cap      = all_cap[view_seed]
+                pm_hist  = all_pm[view_seed]
+                roll_w   = roll_days * 24
                 roll = np.convolve(cap, np.ones(roll_w)/roll_w, mode="same") if len(cap) >= roll_w else cap
 
-                # Separate PM vs failure downtime per hour
-                down = cap < 1.0
+                down      = cap < 1.0
                 pm_down   = down & pm_hist
                 fail_down = down & ~pm_hist
-
                 _n_ez_tl   = TOPOLOGY.total_electrolyzers()
                 _n_comp_tl = TOPOLOGY.total_compressors()
                 n_pm_rows  = _n_ez_tl + _n_comp_tl
 
                 fig = make_subplots(
                     rows=3, cols=1, shared_xaxes=True,
-                    row_heights=[0.55, 0.15, 0.30],
-                    vertical_spacing=0.04,
-                    subplot_titles=("Plant Capacity", "PM Schedule (per unit)", "Downtime Classification"),
+                    row_heights=[0.55, 0.15, 0.30], vertical_spacing=0.04,
+                    subplot_titles=("Plant Capacity", "PM Schedule (per unit)", "Capacity Loss"),
                 )
-
-                # ── Row 1: Capacity timeline ──────────────────
                 fig.add_trace(go.Scatter(
                     x=years_ax, y=cap * 100, mode="lines",
                     line=dict(color="rgba(30,30,30,0.15)", width=0.5),
-                    name="Hourly capacity", showlegend=False,
+                    name="Hourly", showlegend=False,
                     hovertemplate="Year %{x:.2f}<br>Capacity: %{y:.1f}%<extra></extra>",
                 ), row=1, col=1)
                 fig.add_trace(go.Scatter(
                     x=years_ax, y=roll * 100, mode="lines",
                     line=dict(color="#1a1a2e", width=2), name=f"{roll_days}d rolling mean",
-                    hovertemplate="Year %{x:.2f}<br>Rolling avg: %{y:.1f}%<extra></extra>",
                 ), row=1, col=1)
-                fig.add_hline(y=overall, line_dash="dot", line_color="#999",
-                              annotation_text=f"Mean {overall:.1f}%",
+                fig.add_hline(y=cap.mean()*100, line_dash="dot", line_color="#999",
+                              annotation_text=f"Mean {cap.mean()*100:.1f}%",
                               annotation_position="top right", row=1, col=1)
 
-                # ── Row 2: PM schedule strips ─────────────────
                 _pm_offsets_tl = st.session_state.get("pm_offsets", {"ez": [], "comp": []})
                 _pm_cfg_tl = st.session_state["pm_config"]
                 _strip_h = 0.8 / max(n_pm_rows, 1)
-
                 for i in range(_n_ez_tl):
                     if _pm_cfg_tl["ez"]["enabled"]:
-                        off = _pm_offsets_tl["ez"][i] if i < len(_pm_offsets_tl.get("ez", [])) else 0
-                        interval = _pm_cfg_tl["ez"]["interval_h"]
-                        dur = _pm_cfg_tl["ez"]["duration_h"]
+                        off = _pm_offsets_tl["ez"][i] if i < len(_pm_offsets_tl.get("ez",[])) else 0
+                        interval, dur = _pm_cfg_tl["ez"]["interval_h"], _pm_cfg_tl["ez"]["duration_h"]
                         t = off if off > 0 else interval
-                        y_pos = 1.0 - i * _strip_h - _strip_h / 2
+                        yp = 1.0 - i * _strip_h - _strip_h / 2
                         while t < len(cap):
-                            fig.add_shape(type="rect",
-                                x0=t/8760, x1=min(t+dur, len(cap))/8760,
-                                y0=y_pos - _strip_h*0.4, y1=y_pos + _strip_h*0.4,
-                                fillcolor="#2196F3", opacity=0.7, line_width=0,
-                                xref="x2", yref="y2")
+                            fig.add_shape(type="rect", x0=t/8760, x1=min(t+dur,len(cap))/8760,
+                                y0=yp-_strip_h*0.4, y1=yp+_strip_h*0.4,
+                                fillcolor="#2196F3", opacity=0.7, line_width=0, xref="x2", yref="y2")
                             t += interval
-
                 for j in range(_n_comp_tl):
-                    off = _pm_offsets_tl["comp"][j] if j < len(_pm_offsets_tl.get("comp", [])) else 0
-                    y_pos = 1.0 - (_n_ez_tl + j) * _strip_h - _strip_h / 2
-                    for ckey in ["cb", "cm", "cs"]:
+                    off = _pm_offsets_tl["comp"][j] if j < len(_pm_offsets_tl.get("comp",[])) else 0
+                    yp = 1.0 - (_n_ez_tl + j) * _strip_h - _strip_h / 2
+                    for ckey in ["cb","cm","cs"]:
                         cpm = _pm_cfg_tl.get(ckey, {})
                         if cpm.get("enabled", False):
-                            interval = cpm["interval_h"]
-                            dur = cpm["duration_h"]
+                            interval, dur = cpm["interval_h"], cpm["duration_h"]
                             t = off if off > 0 else interval
-                            _ccol = {"cb": "#9C27B0", "cm": "#E91E63", "cs": "#FF5722"}[ckey]
+                            _ccol = {"cb":"#9C27B0","cm":"#E91E63","cs":"#FF5722"}[ckey]
                             while t < len(cap):
-                                fig.add_shape(type="rect",
-                                    x0=t/8760, x1=min(t+dur, len(cap))/8760,
-                                    y0=y_pos - _strip_h*0.4, y1=y_pos + _strip_h*0.4,
-                                    fillcolor=_ccol, opacity=0.7, line_width=0,
-                                    xref="x2", yref="y2")
+                                fig.add_shape(type="rect", x0=t/8760, x1=min(t+dur,len(cap))/8760,
+                                    y0=yp-_strip_h*0.4, y1=yp+_strip_h*0.4,
+                                    fillcolor=_ccol, opacity=0.7, line_width=0, xref="x2", yref="y2")
                                 t += interval
-
                 pm_labels = [f"EZ{i+1}" for i in range(_n_ez_tl)] + [f"C{j+1}" for j in range(_n_comp_tl)]
-                pm_ticks  = [1.0 - k * _strip_h - _strip_h/2 for k in range(n_pm_rows)]
-                fig.update_yaxes(
-                    tickvals=pm_ticks, ticktext=pm_labels, range=[0, 1.1],
-                    tickfont=dict(size=9), row=2, col=1,
-                )
+                pm_ticks = [1.0 - k*_strip_h - _strip_h/2 for k in range(n_pm_rows)]
+                fig.update_yaxes(tickvals=pm_ticks, ticktext=pm_labels, range=[0,1.1],
+                                tickfont=dict(size=9), row=2, col=1)
 
-                # ── Row 3: Capacity loss (PM vs failure) ──────
                 loss = (1.0 - cap) * 100
-                pm_loss   = loss * pm_hist.astype(float)
-                fail_loss = loss * (~pm_hist).astype(float)
-
+                pm_loss, fail_loss = loss * pm_hist.astype(float), loss * (~pm_hist).astype(float)
                 ds = max(1, len(cap) // 4000)
                 x_ds = years_ax[::ds]
-                pm_ds   = np.array([pm_loss[i*ds:min((i+1)*ds, len(cap))].mean()
-                                    for i in range(len(x_ds))])
-                fail_ds = np.array([fail_loss[i*ds:min((i+1)*ds, len(cap))].mean()
-                                    for i in range(len(x_ds))])
-
-                fig.add_trace(go.Scatter(
-                    x=x_ds, y=pm_ds, mode="lines", fill="tozeroy",
+                pm_ds   = np.array([pm_loss[i*ds:min((i+1)*ds,len(cap))].mean() for i in range(len(x_ds))])
+                fail_ds = np.array([fail_loss[i*ds:min((i+1)*ds,len(cap))].mean() for i in range(len(x_ds))])
+                fig.add_trace(go.Scatter(x=x_ds, y=pm_ds, mode="lines", fill="tozeroy",
                     line=dict(color="#2196F3", width=0), fillcolor="rgba(33,150,243,0.5)",
-                    name="PM capacity loss",
-                    hovertemplate="Year %{x:.2f}<br>PM loss: %{y:.1f}%<extra></extra>",
-                ), row=3, col=1)
-                fig.add_trace(go.Scatter(
-                    x=x_ds, y=pm_ds + fail_ds, mode="lines", fill="tonexty",
+                    name="PM loss"), row=3, col=1)
+                fig.add_trace(go.Scatter(x=x_ds, y=pm_ds+fail_ds, mode="lines", fill="tonexty",
                     line=dict(color="#E24B4A", width=0), fillcolor="rgba(226,75,74,0.5)",
-                    name="Failure capacity loss",
-                    hovertemplate="Year %{x:.2f}<br>Total loss: %{y:.1f}%<extra></extra>",
-                ), row=3, col=1)
-
-                for y in range(1, n_years + 1):
+                    name="Failure loss"), row=3, col=1)
+                for y in range(1, n_years+1):
                     fig.add_vline(x=y, line_color="#ccc", line_width=0.5, line_dash="dash")
-
                 fig.update_layout(
                     height=650,
                     xaxis3=dict(title="Year", tickmode="linear", dtick=1,
                                 rangeslider=dict(visible=True, thickness=0.04)),
-                    yaxis=dict(title="Capacity (%)", range=[0, 108]),
-                    yaxis3=dict(title="Capacity loss (%)", range=[0, max(15, (pm_ds+fail_ds).max()*1.3)]),
+                    yaxis=dict(title="Capacity (%)", range=[0,108]),
+                    yaxis3=dict(title="Loss (%)", range=[0, max(15,(pm_ds+fail_ds).max()*1.3)]),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
                     margin=dict(l=55, r=20, t=50, b=60),
                     hovermode="x unified", plot_bgcolor="#F8F7F4", paper_bgcolor="white",
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
+            # ── Monthly: MC aggregated ────────────────────────
             with tl_monthly:
-                n_months  = len(cap) // 730
-                mo_avail  = [cap[i*730:(i+1)*730].mean()*100 for i in range(n_months)]
-                mo_x      = [(i + 0.5) / 12 for i in range(n_months)]
-                mo_colors = [
-                    BAND_COLORS["100%"]   if v >= 100 else
-                    BAND_COLORS["75-99%"] if v >= 75  else
-                    BAND_COLORS["50-74%"] if v >= 50  else
-                    BAND_COLORS["25-49%"] if v >= 25  else
-                    BAND_COLORS["0-24%"]  for v in mo_avail
-                ]
+                n_months = all_cap.shape[1] // 730
+                mo_all = np.array([[c[i*730:(i+1)*730].mean()*100 for i in range(n_months)] for c in all_cap])
+                mo_mean = mo_all.mean(axis=0)
+                mo_p10  = np.percentile(mo_all, 10, axis=0)
+                mo_p90  = np.percentile(mo_all, 90, axis=0)
+                mo_x = [(i + 0.5) / 12 for i in range(n_months)]
+
                 fig2 = go.Figure()
-                fig2.add_trace(go.Bar(
-                    x=mo_x, y=mo_avail, marker_color=mo_colors, name="Monthly avg",
-                    hovertemplate="Month %{x:.1f}<br>Avg availability: %{y:.1f}%<extra></extra>",
-                ))
+                fig2.add_trace(go.Scatter(x=mo_x, y=mo_p90, mode="lines",
+                    line=dict(width=0), showlegend=False))
+                fig2.add_trace(go.Scatter(x=mo_x, y=mo_p10, mode="lines",
+                    line=dict(width=0), fill="tonexty", fillcolor="rgba(100,150,200,0.2)",
+                    name="P10–P90 range"))
+                fig2.add_trace(go.Scatter(x=mo_x, y=mo_mean, mode="lines",
+                    line=dict(color="#1a1a2e", width=2), name="Mean",
+                    hovertemplate="Month %{x:.1f}<br>Mean: %{y:.1f}%<extra></extra>"))
                 fig2.add_hline(y=overall, line_dash="dash", line_color="#333",
-                               annotation_text=f"Mean {overall:.1f}%", annotation_position="top right")
-                for y in range(1, n_years + 1):
-                    fig2.add_vline(x=y, line_color="#aaaaaa", line_width=0.5, line_dash="dash")
-                fig2.update_layout(
-                    height=380,
+                               annotation_text=f"Overall {overall:.1f}%", annotation_position="top right")
+                for y in range(1, n_years+1):
+                    fig2.add_vline(x=y, line_color="#aaa", line_width=0.5, line_dash="dash")
+                fig2.update_layout(height=380,
                     xaxis=dict(title="Year", tickmode="linear", dtick=1),
                     yaxis=dict(title="Avg availability (%)", range=[0, 110]),
                     plot_bgcolor="#F8F7F4", paper_bgcolor="white",
-                    margin=dict(l=50, r=20, t=30, b=50),
-                )
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                    margin=dict(l=50, r=20, t=30, b=50))
                 st.plotly_chart(fig2, use_container_width=True)
 
+            # ── Yearly: MC aggregated ─────────────────────────
             with tl_yearly:
-                yr_avail = [cap[y*8760:(y+1)*8760].mean()*100 for y in range(n_years)]
-                yr_x     = list(range(1, n_years + 1))
-                yr_colors = [
-                    BAND_COLORS["100%"]   if v >= 95 else
-                    BAND_COLORS["75-99%"] if v >= 85 else
-                    BAND_COLORS["50-74%"] if v >= 70 else
-                    BAND_COLORS["25-49%"] if v >= 50 else
-                    BAND_COLORS["0-24%"]  for v in yr_avail
-                ]
+                yr_all = np.array([[c[y*8760:(y+1)*8760].mean()*100 for y in range(n_years)] for c in all_cap])
+                yr_mean = yr_all.mean(axis=0)
+                yr_p10  = np.percentile(yr_all, 10, axis=0)
+                yr_p90  = np.percentile(yr_all, 90, axis=0)
+                yr_x = list(range(1, n_years+1))
+
                 bottleneck_kg_hr = min(
                     TOPOLOGY.theoretical_capacity_kg_per_hr(),
-                    TOPOLOGY.theoretical_compressor_capacity_kg_per_hr()
-                )
-                yr_lost = [(1 - v/100) * bottleneck_kg_hr * 8760 / 1000 for v in yr_avail]
-                fig3 = make_subplots(
-                    rows=2, cols=1, shared_xaxes=True,
-                    subplot_titles=("Yearly availability", "Lost production (t H₂)"),
-                    vertical_spacing=0.12, row_heights=[0.6, 0.4],
-                )
-                fig3.add_trace(go.Bar(
-                    x=yr_x, y=yr_avail, marker_color=yr_colors, name="Availability",
-                    text=[f"{v:.1f}%" for v in yr_avail], textposition="outside",
-                    hovertemplate="Year %{x}<br>Availability: %{y:.1f}%<extra></extra>",
+                    TOPOLOGY.theoretical_compressor_capacity_kg_per_hr())
+                yr_lost_mean = [(1 - v/100) * bottleneck_kg_hr * 8760 / 1000 for v in yr_mean]
+
+                fig3 = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                    subplot_titles=("Yearly availability (mean ± P10/P90)", "Lost production (t H₂)"),
+                    vertical_spacing=0.12, row_heights=[0.6, 0.4])
+                fig3.add_trace(go.Bar(x=yr_x, y=yr_mean, name="Mean",
+                    marker_color=[BAND_COLORS["100%"] if v>=95 else BAND_COLORS["75-99%"] if v>=85
+                                  else BAND_COLORS["50-74%"] if v>=70 else BAND_COLORS["25-49%"]
+                                  for v in yr_mean],
+                    text=[f"{v:.1f}%" for v in yr_mean], textposition="outside",
+                    error_y=dict(type="data", symmetric=False,
+                                 array=(yr_p90 - yr_mean).tolist(),
+                                 arrayminus=(yr_mean - yr_p10).tolist(),
+                                 color="#888", thickness=1.5),
+                    hovertemplate="Year %{x}<br>Mean: %{y:.1f}%<br>"
+                                 "P10: %{customdata[0]:.1f}% P90: %{customdata[1]:.1f}%<extra></extra>",
+                    customdata=list(zip(yr_p10, yr_p90)),
                 ), row=1, col=1)
                 fig3.add_hline(y=overall, line_dash="dash", line_color="#333",
-                               annotation_text=f"Mean {overall:.1f}%", row=1, col=1)
-                fig3.add_trace(go.Bar(
-                    x=yr_x, y=yr_lost, marker_color="#D85A30", name="Lost production",
-                    hovertemplate="Year %{x}<br>Lost: %{y:.1f} t H₂<extra></extra>",
+                               annotation_text=f"Overall {overall:.1f}%", row=1, col=1)
+                fig3.add_trace(go.Bar(x=yr_x, y=yr_lost_mean, marker_color="#D85A30",
+                    name="Lost prod.", hovertemplate="Year %{x}<br>Lost: %{y:.1f} t<extra></extra>",
                 ), row=2, col=1)
-                fig3.update_layout(
-                    height=480, showlegend=False,
+                fig3.update_layout(height=480, showlegend=False,
                     plot_bgcolor="#F8F7F4", paper_bgcolor="white",
                     xaxis2=dict(title="Year", tickmode="linear", dtick=1),
                     yaxis=dict(title="Availability (%)", range=[0, 115]),
                     yaxis2=dict(title="Lost prod. (t H₂)"),
-                    margin=dict(l=60, r=20, t=50, b=50),
-                )
+                    margin=dict(l=60, r=20, t=50, b=50))
                 st.plotly_chart(fig3, use_container_width=True)
-                st.caption(
-                    f"Total lost: **{sum(yr_lost):,.1f} t H₂** over {n_years} years "
-                    f"at {bottleneck_kg_hr:.2f} kg/hr plant capacity"
-                )
+                st.caption(f"Total lost (mean): **{sum(yr_lost_mean):,.1f} t H₂** over {n_years} years")
 
+            # ── Exceedance: MC aggregated ─────────────────────
             with tl_exceed:
-                st.caption(
-                    "For a given capacity level X, what fraction of hours is plant capacity ≥ X? "
-                    "A steep drop near 100% = frequent partial outages."
-                )
-                levels = np.linspace(0, 1, 500)
-                exceed = np.array([(cap >= lv).mean() * 100 for lv in levels])
+                st.caption("Exceedance curve: what fraction of hours is capacity ≥ X? "
+                           "Shaded band = P10–P90 across seeds.")
+                levels = np.linspace(0, 1, 300)
+                exc_all = np.array([[(c >= lv).mean()*100 for lv in levels] for c in all_cap])
+                exc_mean = exc_all.mean(axis=0)
+                exc_p10  = np.percentile(exc_all, 10, axis=0)
+                exc_p90  = np.percentile(exc_all, 90, axis=0)
+
                 fig4 = go.Figure()
-                fig4.add_trace(go.Scatter(
-                    x=levels * 100, y=exceed, mode="lines",
-                    line=dict(color="#533483", width=2),
-                    fill="tozeroy", fillcolor="rgba(83,52,131,0.12)",
-                    hovertemplate="Capacity ≥ %{x:.1f}%<br>%{y:.1f}% of hours<extra></extra>",
-                    name="Exceedance",
-                ))
+                fig4.add_trace(go.Scatter(x=levels*100, y=exc_p90, mode="lines",
+                    line=dict(width=0), showlegend=False))
+                fig4.add_trace(go.Scatter(x=levels*100, y=exc_p10, mode="lines",
+                    line=dict(width=0), fill="tonexty", fillcolor="rgba(83,52,131,0.15)",
+                    name="P10–P90"))
+                fig4.add_trace(go.Scatter(x=levels*100, y=exc_mean, mode="lines",
+                    line=dict(color="#533483", width=2), name="Mean",
+                    hovertemplate="Cap ≥ %{x:.1f}%<br>%{y:.1f}% of hours<extra></extra>"))
                 for pct, label, color in [(50,"P50","#1D9E75"),(90,"P90","#EF9F27"),(99,"P99","#E24B4A")]:
-                    idx = np.searchsorted(-exceed, -pct)
+                    idx = np.searchsorted(-exc_mean, -pct)
                     if 0 < idx < len(levels):
                         fig4.add_vline(x=levels[idx]*100, line_dash="dot", line_color=color,
                                        annotation_text=f"{label}: {levels[idx]*100:.1f}%",
                                        annotation_position="top right")
-                fig4.update_layout(
-                    height=380,
+                fig4.update_layout(height=380,
                     xaxis=dict(title="Plant capacity (%)"),
                     yaxis=dict(title="% of hours capacity ≥ X", range=[0, 105]),
                     plot_bgcolor="#F8F7F4", paper_bgcolor="white",
-                    margin=dict(l=60, r=20, t=30, b=50), hovermode="x",
-                )
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                    margin=dict(l=60, r=20, t=30, b=50), hovermode="x")
                 st.plotly_chart(fig4, use_container_width=True)
 
+            # ── Capacity Bands: MC aggregated ─────────────────
             with tl_bands:
-                st.caption(
-                    "Total hours the plant spent at each capacity level. "
-                    "A healthy plant concentrates hours in the 100% band."
-                )
+                st.caption("Mean hours at each capacity level across all seeds.")
                 BAND_DEFS = [
-                    (1.00, 1.01, "100%",   "#1D9E75"),
-                    (0.76, 1.00, "76-99%", "#639922"),
-                    (0.51, 0.75, "51-75%", "#EF9F27"),
-                    (0.26, 0.50, "26-50%", "#D85A30"),
-                    (0.01, 0.25, "1-25%",  "#E24B4A"),
-                    (0.00, 0.01, "0%",     "#8B0000"),
+                    (1.00, 1.01, "100%","#1D9E75"), (0.76, 1.00, "76-99%","#639922"),
+                    (0.51, 0.75, "51-75%","#EF9F27"), (0.26, 0.50, "26-50%","#D85A30"),
+                    (0.01, 0.25, "1-25%","#E24B4A"), (0.00, 0.01, "0%","#8B0000"),
                 ]
-                band_labels, band_hours, band_colors = [], [], []
+                total_h_tl = all_cap.shape[1]
+                band_means, band_stds, blabels, bcolors = [], [], [], []
                 for lo, hi, lbl, col in BAND_DEFS:
-                    h = int(((cap >= lo) & (cap < hi + 0.001)).sum())
-                    band_labels.append(lbl)
-                    band_hours.append(h)
-                    band_colors.append(col)
+                    per_seed = [int(((c >= lo) & (c < hi + 0.001)).sum()) for c in all_cap]
+                    band_means.append(np.mean(per_seed))
+                    band_stds.append(np.std(per_seed))
+                    blabels.append(lbl); bcolors.append(col)
 
                 fig_bands = go.Figure()
                 fig_bands.add_trace(go.Bar(
-                    x=band_labels, y=band_hours, marker_color=band_colors,
-                    text=[f"{h:,} h<br>({h/len(cap)*100:.1f}%)" for h in band_hours],
+                    x=blabels, y=band_means, marker_color=bcolors,
+                    error_y=dict(type="data", array=band_stds, color="#888", thickness=1.5),
+                    text=[f"{m:,.0f} h<br>({m/total_h_tl*100:.1f}%)" for m in band_means],
                     textposition="outside",
-                    hovertemplate="Band: %{x}<br>Hours: %{y:,}<br>"
-                                 f"of {len(cap):,} total<extra></extra>",
+                    hovertemplate="Band: %{x}<br>Mean: %{y:,.0f} h ± %{error_y.array:.0f}<extra></extra>",
                 ))
-                fig_bands.update_layout(
-                    height=420, showlegend=False,
-                    title="Capacity Band Distribution",
-                    yaxis=dict(title="Hours"),
-                    plot_bgcolor="#F8F7F4", paper_bgcolor="white",
-                    margin=dict(l=60, r=20, t=50, b=50),
-                )
+                fig_bands.update_layout(height=420, showlegend=False,
+                    title=f"Capacity Band Distribution (mean of {n_seeds} seeds)",
+                    yaxis=dict(title="Hours"), plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+                    margin=dict(l=60, r=20, t=50, b=50))
                 st.plotly_chart(fig_bands, use_container_width=True)
 
+            # ── PM vs Failures: MC aggregated ─────────────────
             with tl_pmvsfail:
-                st.caption(
-                    "Planned maintenance vs unplanned failure downtime per year. "
-                    "High unplanned bars suggest the PM interval is too long or component reliability is low."
-                )
-                yr_pm_h, yr_fail_h = [], []
-                for y in range(n_years):
-                    sl = slice(y * 8760, (y + 1) * 8760)
-                    yr_cap = cap[sl]
-                    yr_pm  = pm_hist[sl]
-                    down = yr_cap < 1.0
-                    pm_down   = int((down & yr_pm).sum())
-                    fail_down = int((down & ~yr_pm).sum())
-                    yr_pm_h.append(pm_down)
-                    yr_fail_h.append(fail_down)
+                st.caption("Mean planned vs unplanned downtime per year across all seeds.")
+                yr_pm_all, yr_fail_all = [], []
+                for cap_s, pm_s in zip(all_cap, all_pm):
+                    pm_y, fail_y = [], []
+                    for y in range(n_years):
+                        sl = slice(y*8760, (y+1)*8760)
+                        down_s = cap_s[sl] < 1.0
+                        pm_y.append(int((down_s & pm_s[sl]).sum()))
+                        fail_y.append(int((down_s & ~pm_s[sl]).sum()))
+                    yr_pm_all.append(pm_y)
+                    yr_fail_all.append(fail_y)
+                yr_pm_mean   = np.mean(yr_pm_all, axis=0)
+                yr_fail_mean = np.mean(yr_fail_all, axis=0)
+                yr_x = list(range(1, n_years+1))
 
-                yr_x = list(range(1, n_years + 1))
                 fig_pmf = go.Figure()
-                fig_pmf.add_trace(go.Bar(
-                    x=yr_x, y=yr_pm_h, name="Planned (PM)",
+                fig_pmf.add_trace(go.Bar(x=yr_x, y=yr_pm_mean, name="Planned (PM)",
                     marker_color="#2196F3",
-                    hovertemplate="Year %{x}<br>PM downtime: %{y:,} h<extra></extra>",
-                ))
-                fig_pmf.add_trace(go.Bar(
-                    x=yr_x, y=yr_fail_h, name="Unplanned (failure)",
+                    hovertemplate="Year %{x}<br>PM: %{y:,.0f} h<extra></extra>"))
+                fig_pmf.add_trace(go.Bar(x=yr_x, y=yr_fail_mean, name="Unplanned (failure)",
                     marker_color="#E24B4A",
-                    hovertemplate="Year %{x}<br>Failure downtime: %{y:,} h<extra></extra>",
-                ))
-                fig_pmf.update_layout(
-                    height=420, barmode="stack",
-                    title="Downtime: Planned Maintenance vs Unplanned Failures",
+                    hovertemplate="Year %{x}<br>Failure: %{y:,.0f} h<extra></extra>"))
+                fig_pmf.update_layout(height=420, barmode="stack",
+                    title=f"Downtime: PM vs Failures (mean of {n_seeds} seeds)",
                     xaxis=dict(title="Year", tickmode="linear", dtick=1),
                     yaxis=dict(title="Hours of reduced capacity"),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
                     plot_bgcolor="#F8F7F4", paper_bgcolor="white",
-                    margin=dict(l=60, r=20, t=50, b=50),
-                )
+                    margin=dict(l=60, r=20, t=50, b=50))
                 st.plotly_chart(fig_pmf, use_container_width=True)
 
-                total_pm = sum(yr_pm_h)
-                total_fail = sum(yr_fail_h)
+                total_pm = float(yr_pm_mean.sum())
+                total_fail = float(yr_fail_mean.sum())
                 total_down = total_pm + total_fail
                 st.caption(
-                    f"**Total:** {total_down:,} h downtime over {n_years} years — "
-                    f"{total_pm:,} h planned ({total_pm/max(total_down,1)*100:.0f}%), "
-                    f"{total_fail:,} h unplanned ({total_fail/max(total_down,1)*100:.0f}%)"
-                )
+                    f"**Mean total:** {total_down:,.0f} h downtime over {n_years} years — "
+                    f"{total_pm:,.0f} h planned ({total_pm/max(total_down,1)*100:.0f}%), "
+                    f"{total_fail:,.0f} h unplanned ({total_fail/max(total_down,1)*100:.0f}%)")
 
+            # ── Component Failures: MC aggregated ─────────────
             with tl_compfail:
-                st.caption(
-                    "Failure count by component type over the full simulation. "
-                    "Shows where maintenance effort should be focused."
-                )
-                model = tl["model"]
-                comp_data = {
-                    "EZ body":       sum(b.failures for b in model.ez_bodies),
-                    "Stack":         sum(s.failures for stks in model.ez_stacks for s in stks),
-                    "Comp block":    sum(u.failures for u in model.comp_block),
-                    "Comp motor":    sum(u.failures for u in model.comp_motor),
-                    "Comp seals":    sum(u.failures for u in model.comp_seals),
-                    "EZ aux":        sum(u.failures for u in model.ez_aux),
-                    "Comp aux":      sum(u.failures for u in model.comp_aux),
-                    "Fill line aux": sum(u.failures for u in model.fill_lines),
-                }
-                comp_names  = list(comp_data.keys())
-                comp_counts = list(comp_data.values())
-                comp_colors = ["#16213e", "#0f3460", "#533483", "#7b2d8e",
-                               "#a569bd", "#2196F3", "#607D8B", "#e94560"]
+                st.caption(f"Mean failure count by component type across {n_seeds} seeds.")
+                _comp_keys = [
+                    ("EZ body",       lambda m: [b.failures for b in m.ez_bodies]),
+                    ("Stack",         lambda m: [s.failures for stks in m.ez_stacks for s in stks]),
+                    ("Comp block",    lambda m: [u.failures for u in m.comp_block]),
+                    ("Comp motor",    lambda m: [u.failures for u in m.comp_motor]),
+                    ("Comp seals",    lambda m: [u.failures for u in m.comp_seals]),
+                    ("EZ aux",        lambda m: [u.failures for u in m.ez_aux]),
+                    ("Comp aux",      lambda m: [u.failures for u in m.comp_aux]),
+                    ("Fill line aux", lambda m: [u.failures for u in m.fill_lines]),
+                ]
+                comp_colors = ["#16213e","#0f3460","#533483","#7b2d8e",
+                               "#a569bd","#2196F3","#607D8B","#e94560"]
+                comp_means, comp_stds, comp_names = [], [], []
+                for name, fn in _comp_keys:
+                    per_seed = [sum(fn(r["model"])) for r in mc_results]
+                    comp_means.append(np.mean(per_seed))
+                    comp_stds.append(np.std(per_seed))
+                    comp_names.append(name)
 
                 fig_cf = go.Figure()
                 fig_cf.add_trace(go.Bar(
-                    x=comp_names, y=comp_counts,
+                    x=comp_names, y=comp_means,
                     marker_color=comp_colors[:len(comp_names)],
-                    text=comp_counts, textposition="outside",
-                    hovertemplate="%{x}<br>Failures: %{y}<extra></extra>",
+                    error_y=dict(type="data", array=comp_stds, color="#888", thickness=1.5),
+                    text=[f"{m:.1f}" for m in comp_means], textposition="outside",
+                    hovertemplate="%{x}<br>Mean: %{y:.1f} ± %{error_y.array:.1f}<extra></extra>",
                 ))
-                fig_cf.update_layout(
-                    height=420, showlegend=False,
-                    title=f"Failure Count by Component Type ({n_years} years)",
+                fig_cf.update_layout(height=420, showlegend=False,
+                    title=f"Failure Count by Component ({n_years} years, {n_seeds} seeds)",
                     yaxis=dict(title="Number of failures"),
                     plot_bgcolor="#F8F7F4", paper_bgcolor="white",
-                    margin=dict(l=60, r=20, t=50, b=50),
-                )
+                    margin=dict(l=60, r=20, t=50, b=50))
                 st.plotly_chart(fig_cf, use_container_width=True)
 
-                # MTBF realized vs theoretical
                 st.subheader("MTBF: Realised vs Theoretical")
-                st.caption(
-                    "Compares actual mean time between failures from the simulation "
-                    "against the Weibull η (characteristic life) parameter. "
-                    "Realised MTBF below η suggests PM resets or clustering effects."
-                )
+                st.caption("Mean realised MTBF across seeds vs Weibull η parameter.")
                 sim_hours = n_years * 8760
                 p = st.session_state["ram_params"]
-                mtbf_rows = []
-                def _mtbf_row(label, units, eta):
-                    n_units = len(units)
-                    total_f = sum(u.failures for u in units)
-                    realised = (n_units * sim_hours) / total_f if total_f > 0 else float("inf")
-                    return {"Component": label, "Units": n_units, "Failures": total_f,
-                            "Realised MTBF (h)": f"{realised:,.0f}" if total_f > 0 else "—",
+                def _mtbf_mc(label, fn, eta):
+                    per_seed_f = [sum(fn(r["model"])) for r in mc_results]
+                    n_units = len(fn(mc_results[0]["model"]))
+                    mean_f = np.mean(per_seed_f)
+                    realised = (n_units * sim_hours) / mean_f if mean_f > 0 else float("inf")
+                    return {"Component": label, "Units": n_units,
+                            "Mean failures": f"{mean_f:.1f}",
+                            "Realised MTBF (h)": f"{realised:,.0f}" if mean_f > 0 else "—",
                             "Theoretical η (h)": f"{eta:,}"}
-
-                mtbf_rows.append(_mtbf_row("EZ body",    model.ez_bodies, p["ez_eta"]))
-                mtbf_rows.append(_mtbf_row("Stack",      [s for stks in model.ez_stacks for s in stks], p["stk_eta"]))
-                mtbf_rows.append(_mtbf_row("Comp block", model.comp_block, p["cb_eta"]))
-                mtbf_rows.append(_mtbf_row("Comp motor", model.comp_motor, p["cm_eta"]))
-                mtbf_rows.append(_mtbf_row("Comp seals", model.comp_seals, p["cs_eta"]))
-
-                import pandas as pd
+                mtbf_rows = [
+                    _mtbf_mc("EZ body",    lambda m: m.ez_bodies, p["ez_eta"]),
+                    _mtbf_mc("Stack",      lambda m: [s for stks in m.ez_stacks for s in stks], p["stk_eta"]),
+                    _mtbf_mc("Comp block", lambda m: m.comp_block, p["cb_eta"]),
+                    _mtbf_mc("Comp motor", lambda m: m.comp_motor, p["cm_eta"]),
+                    _mtbf_mc("Comp seals", lambda m: m.comp_seals, p["cs_eta"]),
+                ]
                 st.dataframe(pd.DataFrame(mtbf_rows), hide_index=True, use_container_width=True)
 
     # ── FMEA ──────────────────────────────────────────────────
