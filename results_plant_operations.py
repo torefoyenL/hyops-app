@@ -466,7 +466,8 @@ def draw_plant_architecture_plotly(topology, ram_params=None):
 
     _BG = "#1a1a2e"
     _C = {"ez": "#16213e", "stack": "#0f3460", "comp": "#533483",
-          "fill": "#e94560", "arrow": "#a0a0c0", "header": "#c0c0d8", "label": "#e0e0f0"}
+          "fill": "#e94560", "aux": "#607D8B",
+          "arrow": "#a0a0c0", "header": "#c0c0d8", "label": "#e0e0f0"}
 
     shapes = []
     anns = []
@@ -494,6 +495,17 @@ def draw_plant_architecture_plotly(topology, ram_params=None):
     def _hl(y, x0, x1, lw=1): _line(x0, y, x1, y, lw)
     def _vl(x, y0, y1, lw=1): _line(x, y0, x, y1, lw)
 
+    def _circle(cx, cy, r, label=None, hover=None):
+        shapes.append(dict(
+            type="circle", x0=cx-r, y0=cy-r, x1=cx+r, y1=cy+r,
+            fillcolor="rgba(0,0,0,0)",
+            line=dict(color=_C["aux"], width=1.5, dash="dash"),
+        ))
+        if label:
+            anns.append(dict(x=cx, y=cy, text=f"<b>{label}</b>", showarrow=False,
+                            font=dict(size=7, color=_C["aux"])))
+        hx.append(cx); hy.append(cy); ht.append(hover or label or "")
+
     Y_TOP, Y_BOT = 0.85, 0.06
     rp = ram_params or {}
 
@@ -506,10 +518,13 @@ def draw_plant_architecture_plotly(topology, ram_params=None):
 
         th = Y_TOP - Y_BOT
         y_ez   = Y_TOP
-        y_stk  = Y_TOP - th * 0.14
-        y_hdr  = y_stk - th * 0.10
-        y_comp = y_hdr - th * 0.12
-        y_fill = y_comp - th * 0.16
+        y_stk  = Y_TOP - th * 0.12
+        y_eaux = y_stk - th * 0.09
+        y_hdr  = y_eaux - th * 0.07
+        y_comp = y_hdr - th * 0.10
+        y_caux = y_comp - th * 0.09
+        y_fill = y_caux - th * 0.10
+        AUX_R  = 0.018
 
         def _fmt(key):
             v = rp.get(key)
@@ -549,11 +564,15 @@ def draw_plant_architecture_plotly(topology, ram_params=None):
                 _vl(xa, y_stk - SBH/2, sm)
                 _vl(xb, y_stk - SBH/2, sm)
                 _hl(sm, xa, xb)
-                _vl(xez, sm, y_hdr)
+                _vl(xez, sm, y_eaux + AUX_R)
             else:
                 _box(xez, y_stk, SBW, SBH, _C["stack"], "Stk",
                      hover=f"<b>Stack (EZ {i+1})</b><br>{stk_hov}")
-                _vl(xez, y_stk - SBH/2, y_hdr)
+                _vl(xez, y_stk - SBH/2, y_eaux + AUX_R)
+            _circle(xez, y_eaux, AUX_R, "Aux",
+                    hover=f"<b>EZ {i+1} Aux</b><br>Exponential (BOM rollup)<br>"
+                          f"Equipment between EZ and compressor")
+            _vl(xez, y_eaux - AUX_R, y_hdr)
 
         _hl(y_hdr, x_ez[0], x_ez[-1], lw=1.5)
         anns.append(dict(x=(x_ez[0]+x_ez[-1])/2, y=y_hdr-0.012,
@@ -565,6 +584,10 @@ def draw_plant_architecture_plotly(topology, ram_params=None):
             _vl(xc, y_hdr, y_comp + BH/2)
             _box(xc, y_comp, BW*1.25, BH*1.05, _C["comp"], f"Comp {j+1}",
                  f"{comp_rate:.1f} kg/h", f"<b>Compressor {j+1}</b><br>{comp_hov}")
+            _vl(xc, y_comp - BH*0.53, y_caux + AUX_R)
+            _circle(xc, y_caux, AUX_R, "Aux",
+                    hover=f"<b>Comp {j+1} Aux</b><br>Exponential (BOM rollup)<br>"
+                          f"Equipment between compressor and fill lines")
 
         if dedicated_lines:
             lpc = max(n_fill // max(n_comp, 1), 1)
@@ -572,9 +595,9 @@ def draw_plant_architecture_plotly(topology, ram_params=None):
                 cspan = span / n_comp
                 cx0, cx1 = xc - cspan/2*0.8, xc + cspan/2*0.8
                 x_fl = [cx0 + (cx1-cx0)*(k+0.5)/lpc for k in range(lpc)]
-                hdr_y = y_comp - BH*0.6 - (y_comp - BH*0.6 - y_fill)*0.35
+                hdr_y = y_caux - AUX_R - (y_caux - AUX_R - y_fill)*0.25
                 _hl(hdr_y, x_fl[0], x_fl[-1], lw=1.2)
-                _vl(xc, y_comp - BH/2, hdr_y)
+                _vl(xc, y_caux - AUX_R, hdr_y)
                 for ki, xf in enumerate(x_fl):
                     fn = j*lpc + ki + 1
                     _vl(xf, hdr_y, y_fill + BH*0.45)
@@ -584,9 +607,9 @@ def draw_plant_architecture_plotly(topology, ram_params=None):
                             text="<i>dedicated lines per compressor</i>", showarrow=False,
                             font=dict(size=9, color=_C["header"]), yanchor="bottom"))
         else:
-            hdr_y = y_comp - BH*0.6 - (y_comp - BH*0.6 - y_fill)*0.3
+            hdr_y = y_caux - AUX_R - (y_caux - AUX_R - y_fill)*0.25
             for xc in x_comp:
-                _vl(xc, y_comp - BH/2, hdr_y)
+                _vl(xc, y_caux - AUX_R, hdr_y)
             _hl(hdr_y, x_comp[0], x_comp[-1], lw=1.5)
             x_fl = [x0 + span*(k+0.5)/n_fill for k in range(n_fill)]
             for k, xf in enumerate(x_fl):
@@ -632,27 +655,32 @@ def draw_plant_architecture_plotly(topology, ram_params=None):
     legend_items = [("Electrolyzer (Weibull)", _C["ez"]), ("Stack (Weibull)", _C["stack"]),
                     ("Compressor (Weibull)", _C["comp"]), ("Fill line (Exp)", _C["fill"])]
     for k, (lbl, col) in enumerate(legend_items):
-        lx = 0.02 + k * 0.25
-        shapes.append(dict(type="rect", x0=lx, y0=0.96, x1=lx+0.22, y1=0.99,
+        lx = 0.02 + k * 0.20
+        shapes.append(dict(type="rect", x0=lx, y0=0.96, x1=lx+0.18, y1=0.99,
                           fillcolor=col, line=dict(color="white", width=0.5)))
-        anns.append(dict(x=lx+0.11, y=0.975, text=f"<b>{lbl}</b>", showarrow=False,
-                        font=dict(size=9, color="white")))
+        anns.append(dict(x=lx+0.09, y=0.975, text=f"<b>{lbl}</b>", showarrow=False,
+                        font=dict(size=8, color="white")))
+    lx_aux = 0.02 + 4 * 0.20
+    shapes.append(dict(type="circle", x0=lx_aux, y0=0.961, x1=lx_aux+0.028, y1=0.989,
+                      fillcolor="rgba(0,0,0,0)", line=dict(color=_C["aux"], width=1.5, dash="dash")))
+    anns.append(dict(x=lx_aux+0.045, y=0.975, text=f"<b>Aux node (Exp)</b>", showarrow=False,
+                    font=dict(size=8, color=_C["aux"]), xanchor="left"))
 
     theo = topology.theoretical_capacity_kg_per_day()
     bneck = "compressors" if topology.compressor_is_bottleneck() else "electrolyzers"
     footer = (f"Theoretical: {theo:.1f} kg/day  (bottleneck: {bneck})  |  "
              f"{topology.total_electrolyzers()} EZ · {topology.total_compressors()} comp · "
              f"{topology.total_fill_lines()} fill lines")
-    anns.append(dict(x=0.5, y=0.28, text=f"<i>{footer}</i>", showarrow=False,
+    anns.append(dict(x=0.5, y=0.23, text=f"<i>{footer}</i>", showarrow=False,
                     font=dict(size=10, color=_C["header"]), xref="x", yref="y"))
 
     fig.update_layout(
         shapes=shapes, annotations=anns,
         xaxis=dict(range=[-0.02, 1.02], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
-        yaxis=dict(range=[0.25, 1.03], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
+        yaxis=dict(range=[0.20, 1.03], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
         plot_bgcolor=_BG, paper_bgcolor=_BG,
         margin=dict(l=10, r=10, t=50, b=30),
-        height=520,
+        height=580,
         title=dict(text=f"Hydrogen Plant — Reliability Architecture  ({topology.mode})",
                   font=dict(size=14, color=_C["label"])),
         showlegend=False, hovermode="closest",
