@@ -388,7 +388,7 @@ tab_plant, tab_ops, tab_econ, tab_data = st.tabs([
 # ────────────────────────────────────────────────────────────
 with tab_plant:
     sub_arch, sub_nodes, sub_tl, sub_fmea = st.tabs([
-        "🏗️ Architecture", "🔩 Nodes", "📉 Reliability Timeline", "📋 FMEA",
+        "🏗️ Architecture", "🔩 Nodes", "📉 Reliability Data & Timeline", "📋 FMEA",
     ])
 
     # ── Architecture ──────────────────────────────────────────
@@ -661,8 +661,9 @@ with tab_plant:
                 sc4.metric("Fill line failures", s["fill_line_failures"])
                 sc5.metric("PM events",          s["pm_events"])
 
-            tl_hourly, tl_monthly, tl_yearly, tl_exceed = st.tabs([
-                "📈 Hourly", "📅 Monthly avg", "📊 Yearly bars", "📉 Exceedance"
+            tl_hourly, tl_monthly, tl_yearly, tl_exceed, tl_bands, tl_pmvsfail, tl_compfail = st.tabs([
+                "📈 Hourly", "📅 Monthly avg", "📊 Yearly bars", "📉 Exceedance",
+                "🟩 Capacity Bands", "🔧 PM vs Failures", "⚙️ Component Failures",
             ])
 
             with tl_hourly:
@@ -805,6 +806,155 @@ with tab_plant:
                     margin=dict(l=60, r=20, t=30, b=50), hovermode="x",
                 )
                 st.plotly_chart(fig4, use_container_width=True)
+
+            with tl_bands:
+                st.caption(
+                    "Total hours the plant spent at each capacity level. "
+                    "A healthy plant concentrates hours in the 100% band."
+                )
+                BAND_DEFS = [
+                    (1.00, 1.01, "100%",   "#1D9E75"),
+                    (0.76, 1.00, "76-99%", "#639922"),
+                    (0.51, 0.75, "51-75%", "#EF9F27"),
+                    (0.26, 0.50, "26-50%", "#D85A30"),
+                    (0.01, 0.25, "1-25%",  "#E24B4A"),
+                    (0.00, 0.01, "0%",     "#8B0000"),
+                ]
+                band_labels, band_hours, band_colors = [], [], []
+                for lo, hi, lbl, col in BAND_DEFS:
+                    h = int(((cap >= lo) & (cap < hi + 0.001)).sum())
+                    band_labels.append(lbl)
+                    band_hours.append(h)
+                    band_colors.append(col)
+
+                fig_bands = go.Figure()
+                fig_bands.add_trace(go.Bar(
+                    x=band_labels, y=band_hours, marker_color=band_colors,
+                    text=[f"{h:,} h<br>({h/len(cap)*100:.1f}%)" for h in band_hours],
+                    textposition="outside",
+                    hovertemplate="Band: %{x}<br>Hours: %{y:,}<br>"
+                                 f"of {len(cap):,} total<extra></extra>",
+                ))
+                fig_bands.update_layout(
+                    height=420, showlegend=False,
+                    title="Capacity Band Distribution",
+                    yaxis=dict(title="Hours"),
+                    plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+                    margin=dict(l=60, r=20, t=50, b=50),
+                )
+                st.plotly_chart(fig_bands, use_container_width=True)
+
+            with tl_pmvsfail:
+                st.caption(
+                    "Planned maintenance vs unplanned failure downtime per year. "
+                    "High unplanned bars suggest the PM interval is too long or component reliability is low."
+                )
+                yr_pm_h, yr_fail_h = [], []
+                for y in range(n_years):
+                    sl = slice(y * 8760, (y + 1) * 8760)
+                    yr_cap = cap[sl]
+                    yr_pm  = pm_hist[sl]
+                    down = yr_cap < 1.0
+                    pm_down   = int((down & yr_pm).sum())
+                    fail_down = int((down & ~yr_pm).sum())
+                    yr_pm_h.append(pm_down)
+                    yr_fail_h.append(fail_down)
+
+                yr_x = list(range(1, n_years + 1))
+                fig_pmf = go.Figure()
+                fig_pmf.add_trace(go.Bar(
+                    x=yr_x, y=yr_pm_h, name="Planned (PM)",
+                    marker_color="#2196F3",
+                    hovertemplate="Year %{x}<br>PM downtime: %{y:,} h<extra></extra>",
+                ))
+                fig_pmf.add_trace(go.Bar(
+                    x=yr_x, y=yr_fail_h, name="Unplanned (failure)",
+                    marker_color="#E24B4A",
+                    hovertemplate="Year %{x}<br>Failure downtime: %{y:,} h<extra></extra>",
+                ))
+                fig_pmf.update_layout(
+                    height=420, barmode="stack",
+                    title="Downtime: Planned Maintenance vs Unplanned Failures",
+                    xaxis=dict(title="Year", tickmode="linear", dtick=1),
+                    yaxis=dict(title="Hours of reduced capacity"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                    plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+                    margin=dict(l=60, r=20, t=50, b=50),
+                )
+                st.plotly_chart(fig_pmf, use_container_width=True)
+
+                total_pm = sum(yr_pm_h)
+                total_fail = sum(yr_fail_h)
+                total_down = total_pm + total_fail
+                st.caption(
+                    f"**Total:** {total_down:,} h downtime over {n_years} years — "
+                    f"{total_pm:,} h planned ({total_pm/max(total_down,1)*100:.0f}%), "
+                    f"{total_fail:,} h unplanned ({total_fail/max(total_down,1)*100:.0f}%)"
+                )
+
+            with tl_compfail:
+                st.caption(
+                    "Failure count by component type over the full simulation. "
+                    "Shows where maintenance effort should be focused."
+                )
+                model = tl["model"]
+                comp_data = {
+                    "EZ body":       sum(b.failures for b in model.ez_bodies),
+                    "Stack":         sum(s.failures for stks in model.ez_stacks for s in stks),
+                    "Comp block":    sum(u.failures for u in model.comp_block),
+                    "Comp motor":    sum(u.failures for u in model.comp_motor),
+                    "Comp seals":    sum(u.failures for u in model.comp_seals),
+                    "EZ aux":        sum(u.failures for u in model.ez_aux),
+                    "Comp aux":      sum(u.failures for u in model.comp_aux),
+                    "Fill line aux": sum(u.failures for u in model.fill_lines),
+                }
+                comp_names  = list(comp_data.keys())
+                comp_counts = list(comp_data.values())
+                comp_colors = ["#16213e", "#0f3460", "#533483", "#7b2d8e",
+                               "#a569bd", "#2196F3", "#607D8B", "#e94560"]
+
+                fig_cf = go.Figure()
+                fig_cf.add_trace(go.Bar(
+                    x=comp_names, y=comp_counts,
+                    marker_color=comp_colors[:len(comp_names)],
+                    text=comp_counts, textposition="outside",
+                    hovertemplate="%{x}<br>Failures: %{y}<extra></extra>",
+                ))
+                fig_cf.update_layout(
+                    height=420, showlegend=False,
+                    title=f"Failure Count by Component Type ({n_years} years)",
+                    yaxis=dict(title="Number of failures"),
+                    plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+                    margin=dict(l=60, r=20, t=50, b=50),
+                )
+                st.plotly_chart(fig_cf, use_container_width=True)
+
+                # MTBF realized vs theoretical
+                st.subheader("MTBF: Realised vs Theoretical")
+                st.caption(
+                    "Compares actual mean time between failures from the simulation "
+                    "against the Weibull η (characteristic life) parameter. "
+                    "Realised MTBF below η suggests PM resets or clustering effects."
+                )
+                sim_hours = n_years * 8760
+                p = st.session_state["ram_params"]
+                mtbf_rows = []
+                def _mtbf_row(label, units, eta):
+                    n_units = len(units)
+                    total_f = sum(u.failures for u in units)
+                    realised = (n_units * sim_hours) / total_f if total_f > 0 else float("inf")
+                    return {"Component": label, "Units": n_units, "Failures": total_f,
+                            "Realised MTBF (h)": f"{realised:,.0f}" if total_f > 0 else "—",
+                            "Theoretical η (h)": f"{eta:,}"}
+
+                mtbf_rows.append(_mtbf_row("EZ body",    model.ez_bodies, p["ez_eta"]))
+                mtbf_rows.append(_mtbf_row("Stack",      [s for stks in model.ez_stacks for s in stks], p["stk_eta"]))
+                mtbf_rows.append(_mtbf_row("Comp block", model.comp_block, p["cb_eta"]))
+                mtbf_rows.append(_mtbf_row("Comp motor", model.comp_motor, p["cm_eta"]))
+                mtbf_rows.append(_mtbf_row("Comp seals", model.comp_seals, p["cs_eta"]))
+
+                import pandas as pd
+                st.dataframe(pd.DataFrame(mtbf_rows), hide_index=True, use_container_width=True)
 
     # ── FMEA ──────────────────────────────────────────────────
     with sub_fmea:
