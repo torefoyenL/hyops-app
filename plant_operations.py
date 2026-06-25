@@ -393,12 +393,13 @@ class StaffSchedule:
 
 class ArrivalPattern:
     def __init__(self, pattern_type="uniform", peak_hour=8.0, peak_hour_2=16.0,
-                 peak_width_hours=3.0, peak_weight=0.5):
-        self.pattern_type      = pattern_type
-        self.peak_hour         = peak_hour
-        self.peak_hour_2       = peak_hour_2
-        self.peak_width_hours  = peak_width_hours
-        self.peak_weight       = peak_weight
+                 peak_width_hours=3.0, peak_width_hours_2=None, peak_weight=0.5):
+        self.pattern_type       = pattern_type
+        self.peak_hour          = peak_hour
+        self.peak_hour_2        = peak_hour_2
+        self.peak_width_hours   = peak_width_hours
+        self.peak_width_hours_2 = peak_width_hours_2 if peak_width_hours_2 is not None else peak_width_hours
+        self.peak_weight        = peak_weight
 
     def rate_at_hour(self, hour):
         import numpy as np
@@ -406,12 +407,13 @@ class ArrivalPattern:
             return 1.0
         def gaussian(h, mu, sigma):
             return np.exp(-0.5 * ((h - mu) / sigma) ** 2)
-        sigma = self.peak_width_hours / 2.355
+        sigma1 = self.peak_width_hours / 2.355
         if self.pattern_type == "single_peak":
-            return gaussian(hour, self.peak_hour, sigma) + 0.05
+            return gaussian(hour, self.peak_hour, sigma1) + 0.05
+        sigma2 = self.peak_width_hours_2 / 2.355
         w = self.peak_weight
-        return (w * gaussian(hour, self.peak_hour, sigma)
-                + (1 - w) * gaussian(hour, self.peak_hour_2, sigma) + 0.05)
+        return (w * gaussian(hour, self.peak_hour, sigma1)
+                + (1 - w) * gaussian(hour, self.peak_hour_2, sigma2) + 0.05)
 
 
 def run_simulation(container_types, plant, avg_arrivals_per_day, days, step_minutes,

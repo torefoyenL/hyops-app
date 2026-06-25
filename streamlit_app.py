@@ -120,14 +120,15 @@ def make_container_types(fa, fb, fc):
     ]
 
 
-def make_arrival_pattern(ptype, ph, ph2, pw, pwt):
+def make_arrival_pattern(ptype, ph, ph2, pw, pw2, pwt):
     if ptype == "uniform":
         return po.ArrivalPattern(pattern_type="uniform")
     if ptype == "single_peak":
         return po.ArrivalPattern(pattern_type="single_peak", peak_hour=ph, peak_width_hours=pw)
     return po.ArrivalPattern(pattern_type="double_peak",
                               peak_hour=ph, peak_hour_2=ph2,
-                              peak_width_hours=pw, peak_weight=pwt)
+                              peak_width_hours=pw, peak_width_hours_2=pw2,
+                              peak_weight=pwt)
 
 
 def make_rel_model(topology, seed, reliability_on):
@@ -323,14 +324,16 @@ with st.sidebar.expander("📦 Arrivals", expanded=False):
     pattern_type = st.selectbox("Timing pattern", ["uniform", "single_peak", "double_peak"])
     peak_hour = peak_hour_2 = None
     peak_width = 3.0
+    peak_width_2 = 3.0
     peak_weight = 0.5
     if pattern_type == "single_peak":
         peak_hour  = st.slider("Peak hour", 0.0, 24.0, 8.0, 0.5)
         peak_width = st.slider("Peak width (hours)", 0.5, 8.0, 3.0, 0.5)
     elif pattern_type == "double_peak":
         peak_hour   = st.slider("First peak hour",  0.0, 24.0,  8.0, 0.5)
+        peak_width  = st.slider("First peak width (hours)", 0.5, 8.0, 2.5, 0.5)
         peak_hour_2 = st.slider("Second peak hour", 0.0, 24.0, 16.0, 0.5)
-        peak_width  = st.slider("Peak width (hours)", 0.5, 8.0, 2.5, 0.5)
+        peak_width_2 = st.slider("Second peak width (hours)", 0.5, 8.0, 2.5, 0.5)
         peak_weight = st.slider("Weight on first peak", 0.1, 0.9, 0.5, 0.05)
     sim_days = st.number_input("Simulated days", min_value=1, value=31, step=1)
     arrival_seed = st.number_input("Arrival seed", min_value=0, value=42, step=1, key="arrival_seed")
@@ -862,7 +865,7 @@ with tab_ops:
         import numpy as np
 
         _containers = make_container_types(frac_a, frac_b, frac_c)
-        _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_weight)
+        _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_width_2, peak_weight)
         _type_colors = {"Type-A": "#2196F3", "Type-B": "#FF9800", "Type-C": "#4CAF50"}
 
         # ── 1. Container fleet composition ──────────────────────
@@ -1030,7 +1033,7 @@ with tab_ops:
             _plant     = po.HydrogenPlant(topology=TOPOLOGY, step_minutes=1)
             _schedule  = make_schedule(schedule_label)
             _containers = make_container_types(frac_a, frac_b, frac_c)
-            _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_weight)
+            _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_width_2, peak_weight)
             with st.spinner("Simulating..."):
                 result = po.run_simulation(
                     container_types=_containers,
@@ -1087,7 +1090,7 @@ with tab_ops:
                                          key="cmp_scheds")
         if st.button("▶ Compare schedules", type="primary", key="btn_cmp") and compare_scheds:
             _containers = make_container_types(frac_a, frac_b, frac_c)
-            _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_weight)
+            _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_width_2, peak_weight)
             rows = []
             with st.spinner("Running..."):
                 for lbl in compare_scheds:
