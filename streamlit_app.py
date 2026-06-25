@@ -49,10 +49,11 @@ _RAM_DEFAULTS = {
     "cs_beta": 3.0, "cs_eta": 20000, "cs_mttr": 48,
 }
 _PM_DEFAULTS = {
-    "ez": {"enabled": True, "interval_h": 8760, "duration_h": 72,  "resets_age": True},
-    "cb": {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
-    "cm": {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
-    "cs": {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
+    "ez":  {"enabled": True, "interval_h": 8760, "duration_h": 72,  "resets_age": True},
+    "stk": {"enabled": True},
+    "cb":  {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
+    "cm":  {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
+    "cs":  {"enabled": True, "interval_h": 8760, "duration_h": 96,  "resets_age": True},
 }
 _STAFF_DEFAULTS = {
     "unmanned": 0, "8-16_closed": 650_000, "8-20_closed": 950_000,
@@ -117,8 +118,10 @@ def _build_ram_dicts():
         "compressor_seals":  dict(beta=p["cs_beta"],  eta=p["cs_eta"],  mttr_corrective=p["cs_mttr"]),
     }
     pm_ss = st.session_state["pm_config"]
+    stk_pm = {**pm_ss["ez"], "enabled": pm_ss.get("stk", {}).get("enabled", True)}
     pm = {
         "electrolyzer_body": dict(pm_ss["ez"]),
+        "stack":             stk_pm,
         "compressor_block":  dict(pm_ss["cb"]),
         "compressor_motor":  dict(pm_ss["cm"]),
         "compressor_seals":  dict(pm_ss["cs"]),
@@ -449,7 +452,7 @@ with tab_plant:
 
         _WB_NODES = [
             ("Electrolyzer body", "ez",  "Housing, membrane assembly. Series with stacks and aux.", "ez"),
-            ("Stack",             "stk", "One stack per EZ. 1-of-N needed → proportional derate.",  None),
+            ("Stack",             "stk", "One stack per EZ. 1-of-N needed → proportional derate.",  "stk"),
             ("Compressor block",  "cb",  "Compressor main block. All of block + motor + seals must be up.", "cb"),
             ("Compressor motor",  "cm",  "Compressor drive motor.", "cm"),
             ("Compressor seals",  "cs",  "Seal system — faster wear, lower η.", "cs"),
@@ -480,7 +483,14 @@ with tab_plant:
                 value=int(p[f"{key}_mttr"]), step=8,
                 key=f"ni_{key}_mttr", label_visibility="collapsed")
 
-            if pm_key is not None:
+            if pm_key == "stk":
+                node_pm = pm_cfg[pm_key]
+                node_pm["enabled"] = cols[4].toggle("On", value=node_pm["enabled"],
+                                                     key=f"pm_en_{pm_key}")
+                cols[5].caption("Inherits")
+                cols[6].caption("EZ body")
+                cols[7].caption("settings")
+            elif pm_key is not None:
                 node_pm = pm_cfg[pm_key]
                 node_pm["enabled"] = cols[4].toggle("On", value=node_pm["enabled"],
                                                      key=f"pm_en_{pm_key}")
@@ -497,11 +507,6 @@ with tab_plant:
                     cols[5].caption("—")
                     cols[6].caption("—")
                     cols[7].caption("—")
-            else:
-                cols[4].caption("Shared")
-                cols[5].caption("with EZ")
-                cols[6].caption("body")
-                cols[7].caption("")
             st.divider()
 
         st.session_state["ram_params"] = p
@@ -749,7 +754,10 @@ with tab_plant:
         st.caption(
             "Blue bars = EZ planned maintenance windows. "
             "Purple bars = compressor PM windows. "
-            "Orange line = approximate EZ production capacity during PM."
+            "Orange line = approximate EZ production capacity during PM.  \n"
+            "**Auto-stagger:** even-indexed units (EZ 1, 3, …) start PM at the full interval. "
+            "Odd-indexed units (EZ 2, 4, …) start at half the interval — "
+            "so with 8000 h interval, EZ 2 first PM is at 4000 h."
         )
 
     # ── Reliability Timeline ───────────────────────────────────
