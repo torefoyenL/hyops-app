@@ -28,10 +28,11 @@ _PALETTE = [
     "#D85A30", "#E24B4A", "#639922", "#8B4513",
     "#2196F3", "#FF6B6B", "#4ECDC4", "#45B7D1",
 ]
-_REVENUE = "#1D9E75"
-_STAFF   = "#4682B4"
-_QUEUE   = "#E24B4A"
-_NET     = "#2C2C2A"
+_REVENUE   = "#1D9E75"
+_STAFF     = "#4682B4"
+_QUEUE     = "#E24B4A"
+_CONTAINER = "#FF9800"
+_NET       = "#2C2C2A"
 
 _LAYOUT = dict(
     plot_bgcolor="#F8F7F4",
@@ -125,11 +126,12 @@ def plot_net_result_spread(headline_df, schedule_order, arrival_rate, n_runs,
 # ──────────────────────────────────────────────────────────────
 
 def plot_stacked_bar(summary_df, title_suffix=""):
-    labels = summary_df["schedule_label"].astype(str).tolist()
-    revenue = summary_df["revenue_kr_annual"].values
-    staff   = summary_df["staff_cost_kr_annual"].values
-    queue   = summary_df["queue_cost_kr_annual"].values
-    net     = summary_df["net_kr_annual"].values
+    labels    = summary_df["schedule_label"].astype(str).tolist()
+    revenue   = summary_df["revenue_kr_annual"].values
+    staff     = summary_df["staff_cost_kr_annual"].values
+    queue     = summary_df.get("queue_cost_kr_annual", np.zeros(len(summary_df))).values
+    container = summary_df.get("container_cost_kr_annual", np.zeros(len(summary_df))).values
+    net       = summary_df["net_kr_annual"].values
 
     fig = go.Figure()
 
@@ -140,23 +142,27 @@ def plot_stacked_bar(summary_df, title_suffix=""):
     ))
     fig.add_trace(go.Bar(
         x=labels, y=-staff, name="Staff cost",
-        marker_color=_STAFF, opacity=0.9,
-        customdata=staff,
+        marker_color=_STAFF, opacity=0.9, customdata=staff,
         hovertemplate="%{x}<br>Staff cost: %{customdata:,.0f} kr/yr<extra></extra>",
     ))
-    fig.add_trace(go.Bar(
-        x=labels, y=-queue, name="Queue cost",
-        marker_color=_QUEUE, opacity=0.9,
-        customdata=queue,
-        hovertemplate="%{x}<br>Queue cost: %{customdata:,.0f} kr/yr<extra></extra>",
-    ))
+    if queue.sum() > 0.5:
+        fig.add_trace(go.Bar(
+            x=labels, y=-queue, name="Trailer queue cost",
+            marker_color=_QUEUE, opacity=0.9, customdata=queue,
+            hovertemplate="%{x}<br>Trailer queue: %{customdata:,.0f} kr/yr<extra></extra>",
+        ))
+    if container.sum() > 0.5:
+        fig.add_trace(go.Bar(
+            x=labels, y=-container, name="Container cost",
+            marker_color=_CONTAINER, opacity=0.9, customdata=container,
+            hovertemplate="%{x}<br>Container cost: %{customdata:,.0f} kr/yr<extra></extra>",
+        ))
     fig.add_trace(go.Scatter(
         x=labels, y=net, name="Net result",
         mode="markers+text",
         marker=dict(color=_NET, size=12, symbol="diamond"),
         text=[_fmt_kr(v) for v in net],
-        textposition="top center",
-        textfont=dict(size=11, color=_NET),
+        textposition="top center", textfont=dict(size=11, color=_NET),
         hovertemplate="%{x}<br>Net: %{y:,.0f} kr/yr<extra></extra>",
     ))
 
@@ -175,18 +181,37 @@ def plot_stacked_bar(summary_df, title_suffix=""):
 # ──────────────────────────────────────────────────────────────
 
 def plot_waterfall(row, title=None):
-    rev   = row["revenue_kr_annual"]
-    staff = row["staff_cost_kr_annual"]
-    queue = row["queue_cost_kr_annual"]
+    rev       = row["revenue_kr_annual"]
+    staff     = row["staff_cost_kr_annual"]
+    queue     = row.get("queue_cost_kr_annual", 0)
+    container = row.get("container_cost_kr_annual", 0)
+    net       = rev - staff - queue - container
+
+    x_labels  = ["Revenue", "Staff cost"]
+    measures  = ["absolute", "relative"]
+    y_vals    = [rev, -staff]
+    texts     = [_fmt_kr(rev), _fmt_kr(-staff)]
+    colors_dec = [_QUEUE]
+
+    if queue > 0.5:
+        x_labels.append("Trailer queue")
+        measures.append("relative")
+        y_vals.append(-queue)
+        texts.append(_fmt_kr(-queue))
+    if container > 0.5:
+        x_labels.append("Container cost")
+        measures.append("relative")
+        y_vals.append(-container)
+        texts.append(_fmt_kr(-container))
+
+    x_labels.append("Net result")
+    measures.append("total")
+    y_vals.append(0)
+    texts.append(_fmt_kr(net))
 
     fig = go.Figure(go.Waterfall(
-        x=["Revenue", "Staff cost", "Queue cost", "Net result"],
-        measure=["absolute", "relative", "relative", "total"],
-        y=[rev, -staff, -queue, 0],
-        text=[_fmt_kr(rev), _fmt_kr(-staff), _fmt_kr(-queue),
-              _fmt_kr(rev - staff - queue)],
-        textposition="outside",
-        textfont=dict(size=12, color=_NET),
+        x=x_labels, measure=measures, y=y_vals, text=texts,
+        textposition="outside", textfont=dict(size=12, color=_NET),
         connector=dict(line=dict(color="#888", width=1, dash="dot")),
         increasing=dict(marker_color=_REVENUE),
         decreasing=dict(marker_color=_QUEUE),
@@ -214,16 +239,27 @@ def plot_waterfall_grid(summary_df, title_suffix=""):
     fig = make_subplots(rows=1, cols=n, subplot_titles=labels, shared_yaxes=True)
 
     for i, (_, row) in enumerate(summary_df.iterrows()):
-        rev   = row["revenue_kr_annual"]
-        staff = row["staff_cost_kr_annual"]
-        queue = row["queue_cost_kr_annual"]
+        rev       = row["revenue_kr_annual"]
+        staff     = row["staff_cost_kr_annual"]
+        queue     = row.get("queue_cost_kr_annual", 0)
+        container = row.get("container_cost_kr_annual", 0)
+        net       = rev - staff - queue - container
+
+        x_g = ["Rev", "Staff"]
+        m_g = ["absolute", "relative"]
+        y_g = [rev, -staff]
+        t_g = [_fmt_kr(rev), _fmt_kr(-staff)]
+        if queue > 0.5:
+            x_g.append("Trailer"); m_g.append("relative")
+            y_g.append(-queue); t_g.append(_fmt_kr(-queue))
+        if container > 0.5:
+            x_g.append("Cont."); m_g.append("relative")
+            y_g.append(-container); t_g.append(_fmt_kr(-container))
+        x_g.append("Net"); m_g.append("total")
+        y_g.append(0); t_g.append(_fmt_kr(net))
 
         fig.add_trace(go.Waterfall(
-            x=["Rev", "Staff", "Queue", "Net"],
-            measure=["absolute", "relative", "relative", "total"],
-            y=[rev, -staff, -queue, 0],
-            text=[_fmt_kr(rev), _fmt_kr(-staff), _fmt_kr(-queue),
-                  _fmt_kr(rev - staff - queue)],
+            x=x_g, measure=m_g, y=y_g, text=t_g,
             textposition="outside", textfont=dict(size=9),
             connector=dict(line=dict(color="#888", width=0.8, dash="dot")),
             increasing=dict(marker_color=_REVENUE),

@@ -45,6 +45,7 @@ All run-level costs are pro-rated linearly to the run's simulated
 
 MARGIN_KR_PER_KG       = 30.0     # revenue per kg H2 sold
 QUEUE_COST_KR_PER_HR   = 1500.0   # cost per trailer-hour in external queue while unmanned
+CONTAINER_COST_KR_PER_HR = 0.0    # passive container cost per container-hour in the system
 
 # Annual staff cost (pay + overhead), kr/year.
 # Keyed by schedule label as used in monte_carlo.default_schedules() /
@@ -113,6 +114,26 @@ def unmanned_queue_cost_kr(results, step_minutes: float,
 
 
 # ============================================================
+# Passive container cost (all schedules)
+# ============================================================
+
+def total_container_hours(results, step_minutes: float) -> float:
+    """
+    Total container-hours spent in the system (external queue + docked +
+    filling) across all timesteps. Applies to all schedules — containers
+    sitting idle at the plant have a rental/opportunity cost.
+    """
+    queue_log  = results["queue_log"]
+    docked_log = results.get("docked_log", [])
+    fill_log   = results["filling_log"]
+    h_per_step = step_minutes / 60.0
+    total = sum(queue_log) + sum(fill_log)
+    if docked_log:
+        total += sum(docked_log)
+    return total * h_per_step
+
+
+# ============================================================
 # Per-run economics
 # ============================================================
 
@@ -123,18 +144,12 @@ def run_economics(
     days: int,
     margin_kr_per_kg: float = MARGIN_KR_PER_KG,
     queue_cost_kr_per_hr: float = QUEUE_COST_KR_PER_HR,
+    container_cost_kr_per_hr: float = CONTAINER_COST_KR_PER_HR,
     staff_cost_overrides: dict = None,
 ) -> dict:
     """
     Compute revenue / cost / margin for one simulated run, both as
     simulated-period totals and annualised (365-day) figures.
-
-    Parameters
-    ----------
-    results        : dict returned by plant_operations.run_simulation()
-    kpis           : dict returned by results_plant_operations.compute_kpis()
-    schedule_label : key into STAFF_ANNUAL_COST (e.g. "unmanned", "8-16_closed")
-    days           : number of simulated days (for pro-rating to annual)
     """
     step_minutes = results["step_minutes"]
 
@@ -151,31 +166,38 @@ def run_economics(
     else:
         queue_cost_kr_run = 0.0
 
-    total_cost_kr_run = staff_cost_kr_run + queue_cost_kr_run
+    container_cost_kr_run = (
+        container_cost_kr_per_hr * total_container_hours(results, step_minutes)
+    )
+
+    total_cost_kr_run = staff_cost_kr_run + queue_cost_kr_run + container_cost_kr_run
     net_kr_run        = revenue_kr - total_cost_kr_run
 
     scale_to_annual = DAYS_PER_YEAR / days
+
+    queue_annual     = queue_cost_kr_run * scale_to_annual
+    container_annual = container_cost_kr_run * scale_to_annual
+    total_annual     = annual_staff_cost_kr + queue_annual + container_annual
 
     return {
         "schedule_label":   schedule_label,
         "days_simulated":   days,
 
-        # --- run-period figures (as simulated) ---
         "dispensed_kg":     dispensed_kg,
         "revenue_kr":       revenue_kr,
         "staff_cost_kr":    staff_cost_kr_run,
         "queue_cost_kr":    queue_cost_kr_run,
+        "container_cost_kr": container_cost_kr_run,
         "total_cost_kr":    total_cost_kr_run,
         "net_kr":           net_kr_run,
 
-        # --- annualised (365-day) figures ---
-        "dispensed_kg_annual":  dispensed_kg   * scale_to_annual,
-        "revenue_kr_annual":    revenue_kr     * scale_to_annual,
-        "staff_cost_kr_annual": annual_staff_cost_kr,
-        "queue_cost_kr_annual": queue_cost_kr_run * scale_to_annual,
-        "total_cost_kr_annual": annual_staff_cost_kr + queue_cost_kr_run * scale_to_annual,
-        "net_kr_annual":        revenue_kr * scale_to_annual
-                                 - (annual_staff_cost_kr + queue_cost_kr_run * scale_to_annual),
+        "dispensed_kg_annual":      dispensed_kg * scale_to_annual,
+        "revenue_kr_annual":        revenue_kr * scale_to_annual,
+        "staff_cost_kr_annual":     annual_staff_cost_kr,
+        "queue_cost_kr_annual":     queue_annual,
+        "container_cost_kr_annual": container_annual,
+        "total_cost_kr_annual":     total_annual,
+        "net_kr_annual":            revenue_kr * scale_to_annual - total_annual,
     }
 
 
@@ -203,6 +225,7 @@ def add_economics_columns(
     df,
     margin_kr_per_kg: float = MARGIN_KR_PER_KG,
     queue_cost_kr_per_hr: float = QUEUE_COST_KR_PER_HR,
+    container_cost_kr_per_hr: float = CONTAINER_COST_KR_PER_HR,
     staff_cost_overrides: dict = None,
 ):
     """
@@ -245,12 +268,19 @@ def add_economics_columns(
             queue_cost_kr_per_hr * queue_kg_hours_per_day * DAYS_PER_YEAR
         )
     # Queue cost only applies to "unmanned" schedule (drivers self-serve).
-    # Any manned schedule has no self-service overhead — during off-hours
-    # containers wait in the external queue but no docking occurs.
     df.loc[df["schedule_label"] != "unmanned", "queue_cost_kr_annual"] = 0.0
 
-    df["total_cost_kr_annual"] = df["staff_cost_kr_annual"] + df["queue_cost_kr_annual"]
-    df["net_kr_annual"]        = df["revenue_kr_annual"] - df["total_cost_kr_annual"]
+    # Passive container cost — applies to all schedules.
+    # Uses avg containers in system (external + docked + filling) × 24h/day.
+    avg_in_system = df.get("avg_external_queue", 0) + df.get("avg_docked_queue", 0) + df.get("avg_filling", 0)
+    df["container_cost_kr_annual"] = (
+        container_cost_kr_per_hr * avg_in_system * 24.0 * DAYS_PER_YEAR
+    )
+
+    df["total_cost_kr_annual"] = (
+        df["staff_cost_kr_annual"] + df["queue_cost_kr_annual"] + df["container_cost_kr_annual"]
+    )
+    df["net_kr_annual"] = df["revenue_kr_annual"] - df["total_cost_kr_annual"]
 
     return df
 
@@ -260,7 +290,8 @@ def economics_summary(df, group_by=("schedule_label",)):
     group_by = list(group_by)
     cols = [
         "revenue_kr_annual", "staff_cost_kr_annual",
-        "queue_cost_kr_annual", "total_cost_kr_annual", "net_kr_annual",
+        "queue_cost_kr_annual", "container_cost_kr_annual",
+        "total_cost_kr_annual", "net_kr_annual",
     ]
     out = (
         df.groupby(group_by)[cols]

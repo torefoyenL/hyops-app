@@ -373,11 +373,20 @@ with st.sidebar.expander("📦 Arrivals", expanded=False):
 # ── Cost & Revenue ───────────────────────────────────────────
 with st.sidebar.expander("💰 Cost & Revenue", expanded=False):
     margin_kr_per_kg     = st.number_input("Revenue margin (kr/kg)", 0.0, value=float(st.session_state["margin_kr"]),     step=1.0)
-    queue_cost_kr_per_hr = st.number_input("Queue cost (kr/trailer-hour)", 0.0, value=float(st.session_state["queue_cost_kr"]), step=50.0)
+    queue_cost_kr_per_hr = st.number_input("Passive trailer queue cost (kr/trailer-hr)", 0.0,
+                                            value=float(st.session_state["queue_cost_kr"]), step=50.0,
+                                            help="Cost per trailer-hour in external queue — unmanned schedule only")
+    container_cost_monthly = st.number_input("Passive container cost (kr/month)", 0.0,
+                                              value=float(st.session_state.get("container_cost_monthly", 0.0)),
+                                              step=1000.0,
+                                              help="Monthly rental/opportunity cost per container at the plant — applies to all schedules")
+    container_cost_kr_per_hr = container_cost_monthly / 730.0
+    st.caption(f"= {container_cost_kr_per_hr:.2f} kr/container-hour")
     if margin_kr_per_kg != st.session_state["margin_kr"]:
         st.session_state["margin_kr"] = margin_kr_per_kg
     if queue_cost_kr_per_hr != st.session_state["queue_cost_kr"]:
         st.session_state["queue_cost_kr"] = queue_cost_kr_per_hr
+    st.session_state["container_cost_monthly"] = container_cost_monthly
     st.caption("Annual staff cost per schedule (kr/year)")
     staff_costs = {}
     for lbl, default_v in _STAFF_DEFAULTS.items():
@@ -1454,6 +1463,7 @@ with tab_ops:
                     result, kpis, schedule_label, int(sim_days),
                     margin_kr_per_kg=float(st.session_state["margin_kr"]),
                     queue_cost_kr_per_hr=float(st.session_state["queue_cost_kr"]),
+                    container_cost_kr_per_hr=container_cost_kr_per_hr,
                     staff_cost_overrides=st.session_state["staff_costs"],
                 )
             st.session_state["single_result"] = (result, kpis, econ)
@@ -1513,6 +1523,7 @@ with tab_ops:
                         result, kpis, lbl, int(sim_days),
                         margin_kr_per_kg=float(st.session_state["margin_kr"]),
                         queue_cost_kr_per_hr=float(st.session_state["queue_cost_kr"]),
+                        container_cost_kr_per_hr=container_cost_kr_per_hr,
                         staff_cost_overrides=st.session_state["staff_costs"],
                     )
                     rows.append({"schedule": lbl, **kpis, **{k: v for k, v in econ.items() if k != "schedule_label"}})
@@ -1613,6 +1624,7 @@ with tab_econ:
                 raw,
                 margin_kr_per_kg=float(st.session_state["margin_kr"]),
                 queue_cost_kr_per_hr=float(st.session_state["queue_cost_kr"]),
+                container_cost_kr_per_hr=container_cost_kr_per_hr,
                 staff_cost_overrides=st.session_state["staff_costs"],
             )
             f1, f2, f3, f4 = st.columns(4)
@@ -1694,6 +1706,7 @@ with tab_data:
                 full_df,
                 margin_kr_per_kg=float(st.session_state["margin_kr"]),
                 queue_cost_kr_per_hr=float(st.session_state["queue_cost_kr"]),
+                container_cost_kr_per_hr=container_cost_kr_per_hr,
                 staff_cost_overrides=st.session_state["staff_costs"],
             )
             cols = [c for c in ["arrival_rate","schedule_label","reliability_label",
