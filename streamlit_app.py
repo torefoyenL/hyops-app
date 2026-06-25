@@ -638,49 +638,62 @@ with tab_plant:
 
     # ── PM Scheduling ─────────────────────────────────────────
     with sub_pm_sched:
-        st.header("PM Scheduling & Offsets")
+        st.header("PM Scheduling")
         import numpy as np
         import plotly.graph_objects as go
 
         n_ez   = TOPOLOGY.total_electrolyzers()
         n_comp = TOPOLOGY.total_compressors()
         pm_cfg = st.session_state["pm_config"]
+        ez_pm  = pm_cfg["ez"]
+        cb_pm  = pm_cfg["cb"]
 
-        offsets = st.session_state.get("pm_offsets", {"ez": [], "comp": []})
-        if len(offsets.get("ez", [])) != n_ez:
-            offsets["ez"] = [0.0] * n_ez
-        if len(offsets.get("comp", [])) != n_comp:
-            offsets["comp"] = [0.0] * n_comp
+        st.caption(
+            "Electrolyzers and compressors are taken down **sequentially** — "
+            "one at a time, so capacity is reduced by 1/N during each PM window. "
+            "Set the gap between consecutive PMs to spread the impact."
+        )
 
-        auto_stagger = st.toggle("Use auto-stagger (A/B groups)", value=True,
-                                  key="pm_auto_stagger")
+        c1, c2 = st.columns(2)
+        gap_days = c1.number_input("Gap between sequential PMs (days)",
+                                    min_value=0, value=2, step=1, key="pm_gap_days")
+        gap_h = gap_days * 24
 
-        if auto_stagger:
-            ez_int  = pm_cfg["ez"]["interval_h"]
-            cb_int  = pm_cfg["cb"]["interval_h"]
-            for i in range(n_ez):
-                offsets["ez"][i] = 0.0 if (i % 2 == 0) else ez_int / 2
+        pair_comp = c2.toggle("Pair compressor PM with electrolyzer PM",
+                               value=True, key="pm_pair_comp")
+
+        # Compute sequential offsets
+        ez_dur  = ez_pm["duration_h"]
+        ez_int  = ez_pm["interval_h"]
+        cb_dur  = cb_pm["duration_h"]
+        cb_int  = cb_pm["interval_h"]
+        ez_step = ez_dur + gap_h
+
+        offsets = {"ez": [], "comp": []}
+        for i in range(n_ez):
+            offsets["ez"].append(float(ez_int + i * ez_step))
+
+        if pair_comp:
             for j in range(n_comp):
-                offsets["comp"][j] = 0.0 if (j % 2 == 0) else cb_int / 2
+                paired_ez = j % n_ez
+                offsets["comp"].append(offsets["ez"][paired_ez])
         else:
-            st.subheader("Electrolyzer offsets")
-            ez_cols = st.columns(min(n_ez, 4))
-            for i in range(n_ez):
-                with ez_cols[i % len(ez_cols)]:
-                    offsets["ez"][i] = float(st.number_input(
-                        f"EZ {i+1} offset (h)", min_value=0,
-                        value=int(offsets["ez"][i]), step=168,
-                        key=f"pm_off_ez_{i}"))
-            st.subheader("Compressor offsets")
-            comp_cols = st.columns(min(n_comp, 4))
+            comp_start = ez_int + n_ez * ez_step + gap_h
+            comp_step  = cb_dur + gap_h
             for j in range(n_comp):
-                with comp_cols[j % len(comp_cols)]:
-                    offsets["comp"][j] = float(st.number_input(
-                        f"Comp {j+1} offset (h)", min_value=0,
-                        value=int(offsets["comp"][j]), step=168,
-                        key=f"pm_off_comp_{j}"))
+                offsets["comp"].append(float(comp_start + j * comp_step))
 
         st.session_state["pm_offsets"] = offsets
+
+        # Summary
+        total_seq = n_ez * ez_step - gap_h
+        st.info(
+            f"**EZ sequence:** {n_ez} × {ez_dur:.0f} h PM + {gap_h:.0f} h gap = "
+            f"**{total_seq:.0f} h** total ({total_seq/24:.0f} days).  \n"
+            f"Capacity during each EZ PM: **{(1 - 1/max(n_ez,1))*100:.0f}%**"
+            + (f"  \n**Compressor:** paired with EZ — Comp {j+1} goes down with EZ {j%n_ez+1}" if pair_comp
+               else f"  \n**Compressor:** separate sequence after EZ, starting at hour {offsets['comp'][0]:,.0f}")
+        )
 
         # ── PM Timeline Preview ───────────────────────────────
         st.subheader("PM Timeline Preview")
@@ -690,13 +703,11 @@ with tab_plant:
         fig_pm = go.Figure()
         unit_labels = []
         y_idx = 0
-        _PM_COL = "#2196F3"
-        _PM_COL_COMP = "#9C27B0"
 
         def _add_windows(interval_h, duration_h, enabled, offset_h, y_pos, color):
             if not enabled:
                 return
-            t = offset_h if offset_h > 0 else interval_h
+            t = offset_h
             while t < total_h:
                 fig_pm.add_shape(type="rect",
                     x0=t, x1=min(t + duration_h, total_h),
@@ -707,47 +718,58 @@ with tab_plant:
         for i in range(n_ez):
             y_idx += 1
             unit_labels.append(f"EZ {i+1}")
-            _add_windows(pm_cfg["ez"]["interval_h"], pm_cfg["ez"]["duration_h"],
-                        pm_cfg["ez"]["enabled"], offsets["ez"][i], y_idx, _PM_COL)
+            _add_windows(ez_int, ez_dur, ez_pm["enabled"],
+                        offsets["ez"][i], y_idx, "#2196F3")
 
         for j in range(n_comp):
             y_idx += 1
             unit_labels.append(f"Comp {j+1}")
-            _add_windows(pm_cfg["cb"]["interval_h"], pm_cfg["cb"]["duration_h"],
-                        pm_cfg["cb"]["enabled"], offsets["comp"][j], y_idx, _PM_COL_COMP)
+            _add_windows(cb_int, cb_dur, cb_pm["enabled"],
+                        offsets["comp"][j], y_idx, "#9C27B0")
 
-        # Capacity overlay
-        cap_arr = np.ones(total_h)
+        # Capacity overlay — EZ + comp combined
+        cap_ez   = np.ones(total_h)
+        cap_comp = np.ones(total_h)
         for i in range(n_ez):
-            if pm_cfg["ez"]["enabled"]:
-                t = offsets["ez"][i] if offsets["ez"][i] > 0 else pm_cfg["ez"]["interval_h"]
+            if ez_pm["enabled"]:
+                t = offsets["ez"][i]
                 while t < total_h:
-                    s, e = int(t), min(int(t + pm_cfg["ez"]["duration_h"]), total_h)
-                    cap_arr[s:e] -= 1.0 / max(n_ez, 1)
-                    t += pm_cfg["ez"]["interval_h"]
-        cap_arr = np.clip(cap_arr, 0, 1)
+                    s, e = int(t), min(int(t + ez_dur), total_h)
+                    cap_ez[s:e] -= 1.0 / max(n_ez, 1)
+                    t += ez_int
+        for j in range(n_comp):
+            if cb_pm["enabled"]:
+                t = offsets["comp"][j]
+                while t < total_h:
+                    s, e = int(t), min(int(t + cb_dur), total_h)
+                    cap_comp[s:e] -= 1.0 / max(n_comp, 1)
+                    t += cb_int
+        cap_plant = np.clip(np.minimum(cap_ez, cap_comp), 0, 1)
 
-        # Downsample for performance
         ds = max(1, total_h // 2000)
-        cap_ds = cap_arr[::ds]
-        x_ds = np.arange(len(cap_ds)) * ds
-
+        x_ds = np.arange(0, total_h, ds)
         fig_pm.add_trace(go.Scatter(
-            x=x_ds, y=cap_ds * 100, mode="lines",
-            line=dict(color="rgba(255,152,0,0.8)", width=1.5),
+            x=x_ds, y=cap_ez[::ds] * 100, mode="lines",
+            line=dict(color="rgba(33,150,243,0.5)", width=1, dash="dot"),
             name="EZ capacity (%)", yaxis="y2",
-            hovertemplate="Hour %{x:,}<br>EZ capacity: %{y:.0f}%<extra></extra>",
+        ))
+        fig_pm.add_trace(go.Scatter(
+            x=x_ds, y=cap_plant[::ds] * 100, mode="lines",
+            line=dict(color="rgba(255,152,0,0.9)", width=2),
+            name="Plant capacity (%)", yaxis="y2",
+            hovertemplate="Hour %{x:,}<br>Plant capacity: %{y:.0f}%<extra></extra>",
         ))
 
         for y in range(1, preview_years + 1):
-            fig_pm.add_vline(x=y * 8760, line_color="#aaa", line_width=0.5, line_dash="dash")
+            fig_pm.add_vline(x=y * 8760, line_color="#aaa", line_width=0.5, line_dash="dash",
+                            annotation_text=f"Year {y}", annotation_position="top")
 
         fig_pm.update_layout(
-            height=max(300, y_idx * 45 + 120),
+            height=max(350, y_idx * 50 + 140),
             xaxis=dict(title="Hours", range=[0, total_h]),
             yaxis=dict(tickvals=list(range(1, y_idx + 1)), ticktext=unit_labels,
                       range=[0.3, y_idx + 0.7]),
-            yaxis2=dict(title="EZ capacity (%)", overlaying="y", side="right",
+            yaxis2=dict(title="Capacity (%)", overlaying="y", side="right",
                        range=[0, 110]),
             plot_bgcolor="#F8F7F4", paper_bgcolor="white",
             margin=dict(l=80, r=60, t=30, b=50),
@@ -755,14 +777,6 @@ with tab_plant:
             hovermode="x",
         )
         st.plotly_chart(fig_pm, use_container_width=True)
-        st.caption(
-            "Blue bars = EZ planned maintenance windows. "
-            "Purple bars = compressor PM windows. "
-            "Orange line = approximate EZ production capacity during PM.  \n"
-            "**Auto-stagger:** even-indexed units (EZ 1, 3, …) start PM at the full interval. "
-            "Odd-indexed units (EZ 2, 4, …) start at half the interval — "
-            "so with 8000 h interval, EZ 2 first PM is at 4000 h."
-        )
 
     # ── Reliability Timeline ───────────────────────────────────
     with sub_tl:
