@@ -1,509 +1,398 @@
-import random
-import uuid
-from collections import deque
-from dataclasses import dataclass
+# -*- coding: utf-8 -*-
+"""
+econ_plots.py
+=============
+Interactive Plotly-based economics visualisations for the HyOps Streamlit app.
+
+Chart types
+-----------
+  - Waterfall: revenue -> staff cost -> queue cost -> net result
+  - Stacked bar: revenue vs cost breakdown per schedule
+  - Net result spread: box plot across seeds per schedule
+  - Sensitivity: net result vs arrival rate, per schedule
+  - Sensitivity by pattern: isolate timing effect
+  - Volume x timing grid: grouped bars
+  - Arrival pattern preview: intensity curve over 24h
+
+All functions return a plotly.graph_objects.Figure.
+Use st.plotly_chart(fig, use_container_width=True) in Streamlit.
+"""
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+# ── Colour palette ──────────────────────────────────────────
+_PALETTE = [
+    "#1D9E75", "#533483", "#4682B4", "#EF9F27",
+    "#D85A30", "#E24B4A", "#639922", "#8B4513",
+    "#2196F3", "#FF6B6B", "#4ECDC4", "#45B7D1",
+]
+_REVENUE = "#1D9E75"
+_STAFF   = "#4682B4"
+_QUEUE   = "#E24B4A"
+_NET     = "#2C2C2A"
+
+_LAYOUT = dict(
+    plot_bgcolor="#F8F7F4",
+    paper_bgcolor="white",
+    font=dict(size=12),
+    hovermode="x unified",
+    margin=dict(l=60, r=20, t=50, b=60),
+)
+
+_MARKERS = ["circle", "square", "diamond", "cross", "triangle-up",
+            "triangle-down", "star", "hexagon"]
 
 
-@dataclass
-class ContainerType:
-    name: str
-    max_capacity_kg: float
-    max_fill_rate_kg_per_hr: float
-    fleet_fraction: float
+def _fmt_kr(v):
+    if abs(v) >= 1e6:
+        return f"{v/1e6:,.1f}M"
+    if abs(v) >= 1e3:
+        return f"{v/1e3:,.0f}k"
+    return f"{v:,.0f}"
 
 
-def adiabatic_compression_energy(mass_kg, P1_bar=30, P2_bar=380, T=298):
-    pass
+# ──────────────────────────────────────────────────────────────
+# 0. Arrival pattern preview
+# ──────────────────────────────────────────────────────────────
+
+def plot_arrival_pattern(arrival_pattern, avg_arrivals_per_day=None, title=None):
+    hours = np.linspace(0, 24, 24 * 12, endpoint=False)
+    intensity = np.array([arrival_pattern.rate_at_hour(h) for h in hours])
+
+    if avg_arrivals_per_day is not None:
+        y = intensity * avg_arrivals_per_day / 24.0
+        y_label = "Expected arrivals / hour"
+    else:
+        y = intensity
+        y_label = "Relative intensity"
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=hours, y=y, mode="lines", fill="tozeroy",
+        line=dict(color=_STAFF, width=2),
+        fillcolor="rgba(70, 130, 180, 0.15)",
+        hovertemplate="Hour: %{x:.1f}<br>" + y_label + ": %{y:.2f}<extra></extra>",
+    ))
+
+    if arrival_pattern.pattern_type in ("single_peak", "double_peak"):
+        fig.add_vline(x=arrival_pattern.peak_hour, line_dash="dash",
+                      line_color=_QUEUE,
+                      annotation_text=f"Peak 1: {arrival_pattern.peak_hour:.1f}h")
+    if arrival_pattern.pattern_type == "double_peak":
+        fig.add_vline(x=arrival_pattern.peak_hour_2, line_dash="dash",
+                      line_color="#EF9F27",
+                      annotation_text=f"Peak 2: {arrival_pattern.peak_hour_2:.1f}h")
+
+    fig.update_layout(
+        **_LAYOUT, height=350, showlegend=False,
+        xaxis=dict(title="Hour of day", tickmode="linear", dtick=2, range=[0, 24]),
+        yaxis=dict(title=y_label),
+        title=title or f"Arrival timing — {arrival_pattern.pattern_type}",
+    )
+    return fig
 
 
-class Container:
-    def __init__(self, container_type, arrival_step):
-        self.container_type   = container_type
-        self.name             = container_type.name
-        self.max_capacity_kg  = container_type.max_capacity_kg
-        self.max_fill_rate_kg_per_hr = container_type.max_fill_rate_kg_per_hr
-        self.arrival_step     = arrival_step
-        self.dock_step        = None
-        self.start_fill_step  = None
-        self.completion_step  = None
-        self.compressor_id    = None
-        self.filled_kg        = 0.0
+# ──────────────────────────────────────────────────────────────
+# 1. Box plot — spread of net result across seeds
+# ──────────────────────────────────────────────────────────────
 
-    def required_fill(self):
-        return self.max_capacity_kg - self.filled_kg
+def plot_net_result_spread(headline_df, schedule_order, arrival_rate, n_runs,
+                           value_col="net_kr_annual"):
+    fig = go.Figure()
 
-    @property
-    def full(self):
-        return self.filled_kg >= self.max_capacity_kg - 0.001
+    for i, lbl in enumerate(schedule_order):
+        vals = headline_df[headline_df["schedule_label"] == lbl][value_col].values
+        fig.add_trace(go.Box(
+            y=vals, name=lbl,
+            marker_color=_PALETTE[i % len(_PALETTE)],
+            boxmean=True,
+            hovertemplate="%{y:,.0f} kr/yr<extra>" + lbl + "</extra>",
+        ))
 
-
-class Compressor:
-    def __init__(self, compressor_id, max_flow_kg_per_hr,
-                 pressure_thresholds=None, Isentropic_efficiency=0.4, step_minutes=1.0):
-        self.compressor_id      = compressor_id
-        self.max_flow_kg_per_hr = max_flow_kg_per_hr
-        self.max_flow_per_step  = max_flow_kg_per_hr / (60 / step_minutes)
-        self.pressure_thresholds = pressure_thresholds or [94, 278, 500]
-        self.Isentropic_efficiency = Isentropic_efficiency
-        self.step_minutes       = step_minutes
-        self.active             = None
-        self.total_dispensed    = 0.0
-        self.reliability_up     = True
-
-    def compression_energy_kwh(self, mass_kg, pressure_bar):
-        return adiabatic_compression_energy(mass_kg, P2_bar=pressure_bar,
-                                             Isentropic_efficiency=self.Isentropic_efficiency) \
-               if mass_kg > 0 else 0.0
-
-    def fill_step(self, electrolyzer_budget_kg):
-        if not self.reliability_up:
-            return 0.0, 30.0
-        if self.active is None or electrolyzer_budget_kg <= 0:
-            return 0.0, 30.0
-        dispensed = min(self.max_flow_per_step, electrolyzer_budget_kg,
-                        self.active.required_fill())
-        self.active.filled_kg    += dispensed
-        self.total_dispensed     += dispensed
-        pressure = self.pressure_thresholds[-1]
-        for p in self.pressure_thresholds:
-            ratio = self.active.filled_kg / self.active.max_capacity_kg
-            if ratio < p / self.pressure_thresholds[-1]:
-                pressure = p
-                break
-        return dispensed, pressure
+    fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
+    fig.update_layout(
+        **_LAYOUT, height=450, showlegend=False,
+        title=f"Net Result Spread  ({arrival_rate} arrivals/day, n={n_runs} seeds)",
+        yaxis=dict(title="Net result (kr/year)", tickformat=",.0f"),
+    )
+    return fig
 
 
-class HydrogenPlant:
-    def __init__(self, electrolyzer_kg_per_hr=None, compressor_flow_kg_per_hr=None,
-                 n_fill_lines=6, pressure_thresholds=None, Isentropic_efficiency=0.4,
-                 electrolyzer_energy_kwh_per_kg=0.0, base_power_kw=0.0,
-                 step_minutes=1.0, topology=None, reliability_model=None):
-        self.step_minutes = step_minutes
-        self.electrolyzer_energy_kwh_per_kg = electrolyzer_energy_kwh_per_kg
-        self.base_power_kw = base_power_kw
-        self.Isentropic_efficiency = Isentropic_efficiency
-        self.reliability_model = reliability_model
-        if pressure_thresholds is None:
-            pressure_thresholds = [94, 278, 500]
+# ──────────────────────────────────────────────────────────────
+# 2. Stacked bar — revenue vs cost per schedule
+# ──────────────────────────────────────────────────────────────
 
-        if topology is None:
-            assert electrolyzer_kg_per_hr is not None
-            if compressor_flow_kg_per_hr is None:
-                half = electrolyzer_kg_per_hr / 2.0
-                compressor_flow_kg_per_hr = [half, half]
-            self.mode = "common"
-            self.electrolyzer_rated_kg_per_hr = [electrolyzer_kg_per_hr]
-            self.n_fill_lines = n_fill_lines
-            self.trains = None
-            self.compressors = [
-                Compressor(i, compressor_flow_kg_per_hr[i],
-                           pressure_thresholds, Isentropic_efficiency, step_minutes)
-                for i in range(len(compressor_flow_kg_per_hr))
-            ]
-            self.comp_fill_line_ids = None
-            self.train_of_compressor = None
-            self.train_of_electrolyzer = None
-        else:
-            self.mode = topology.mode
-            self.topology = topology
-            if topology.mode == "common":
-                self.electrolyzer_rated_kg_per_hr = [
-                    topology.electrolyzer_kg_per_hr_each] * topology.n_electrolyzers
-                self.train_of_electrolyzer = None
-                self.n_fill_lines = topology.n_fill_lines
-                self.trains = None
-                self.compressors = [
-                    Compressor(i, topology.compressor_flow_kg_per_hr_each,
-                               topology.pressure_thresholds or pressure_thresholds,
-                               topology.Isentropic_efficiency, step_minutes)
-                    for i in range(topology.n_compressors)
-                ]
-                self.comp_fill_line_ids = None
-                self.train_of_compressor = None
-            elif topology.mode == "pooled_ez_dedicated_comp":
-                self.electrolyzer_rated_kg_per_hr = [
-                    topology.electrolyzer_kg_per_hr_each] * topology.n_electrolyzers
-                self.train_of_electrolyzer = None
-                self.n_fill_lines = topology.total_fill_lines()
-                self.trains = None
-                self.compressors = [
-                    Compressor(i, topology.compressor_flow_kg_per_hr_each,
-                               topology.pressure_thresholds or pressure_thresholds,
-                               topology.Isentropic_efficiency, step_minutes)
-                    for i in range(topology.n_compressors)
-                ]
-                per = topology.n_fill_lines_per_compressor
-                self.comp_fill_line_ids = {
-                    i: list(range(i * per, (i + 1) * per))
-                    for i in range(topology.n_compressors)
-                }
-                self.train_of_compressor = None
-            elif topology.mode == "trains":
-                self.electrolyzer_rated_kg_per_hr = []
-                self.compressors = []
-                self.comp_fill_line_ids = {}
-                self.train_of_compressor = {}
-                self.train_of_electrolyzer = []
-                self.train_fill_line_ids = []
-                self.train_n_fill_lines = []
-                comp_id = 0
-                slot_cursor = 0
-                for t_idx, train in enumerate(topology.trains):
-                    self.electrolyzer_rated_kg_per_hr.extend(
-                        [train.electrolyzer_kg_per_hr_each] * train.n_electrolyzers)
-                    self.train_of_electrolyzer.extend([t_idx] * train.n_electrolyzers)
-                    train_slots = list(range(slot_cursor, slot_cursor + train.n_fill_lines))
-                    self.train_fill_line_ids.append(train_slots)
-                    self.train_n_fill_lines.append(train.n_fill_lines)
-                    slot_cursor += train.n_fill_lines
-                    for _ in range(train.n_compressors):
-                        self.compressors.append(Compressor(
-                            comp_id, train.compressor_flow_kg_per_hr_each,
-                            topology.pressure_thresholds or pressure_thresholds,
-                            topology.Isentropic_efficiency, step_minutes))
-                        self.comp_fill_line_ids[comp_id] = train_slots
-                        self.train_of_compressor[comp_id] = t_idx
-                        comp_id += 1
-                self.n_fill_lines = slot_cursor
-                self.trains = topology.trains
+def plot_stacked_bar(summary_df, title_suffix=""):
+    labels = summary_df["schedule_label"].astype(str).tolist()
+    revenue = summary_df["revenue_kr_annual"].values
+    staff   = summary_df["staff_cost_kr_annual"].values
+    queue   = summary_df["queue_cost_kr_annual"].values
+    net     = summary_df["net_kr_annual"].values
 
-        self.external_queue  = deque()
-        self.shared_docked   = []
-        self.total_dispensed = 0.0
-        self.total_production = sum(self.electrolyzer_rated_kg_per_hr) / (60 / step_minutes)
-        self.max_parallel_fills = self.n_fill_lines
-        self._ez_frac       = [1.0] * len(self.electrolyzer_rated_kg_per_hr)
-        self._fill_line_up  = [True] * self.n_fill_lines
-        self.electrolyzer_step_kg = self._compute_electrolyzer_step_kg()
+    fig = go.Figure()
 
-        if self.trains is not None:
-            self.fill_line_owner_train = {}
-            for t_idx, slots in enumerate(self.train_fill_line_ids):
-                for s in slots:
-                    self.fill_line_owner_train[s] = t_idx
-        else:
-            self.fill_line_owner_train = None
+    fig.add_trace(go.Bar(
+        x=labels, y=revenue, name="Revenue",
+        marker_color=_REVENUE, opacity=0.9,
+        hovertemplate="%{x}<br>Revenue: %{y:,.0f} kr/yr<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=labels, y=-staff, name="Staff cost",
+        marker_color=_STAFF, opacity=0.9,
+        customdata=staff,
+        hovertemplate="%{x}<br>Staff cost: %{customdata:,.0f} kr/yr<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=labels, y=-queue, name="Queue cost",
+        marker_color=_QUEUE, opacity=0.9,
+        customdata=queue,
+        hovertemplate="%{x}<br>Queue cost: %{customdata:,.0f} kr/yr<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=labels, y=net, name="Net result",
+        mode="markers+text",
+        marker=dict(color=_NET, size=12, symbol="diamond"),
+        text=[_fmt_kr(v) for v in net],
+        textposition="top center",
+        textfont=dict(size=11, color=_NET),
+        hovertemplate="%{x}<br>Net: %{y:,.0f} kr/yr<extra></extra>",
+    ))
 
-    def apply_reliability_state(self, state):
-        self._ez_frac = list(state.ez_frac)
-        for comp, up in zip(self.compressors, state.comp_up):
-            comp.reliability_up = up
-        self._fill_line_up = list(state.fill_line_up)
-        self.electrolyzer_step_kg = self._compute_electrolyzer_step_kg()
-
-    def _compute_electrolyzer_step_kg(self):
-        step_factor = 60 / self.step_minutes
-        if self.trains is None:
-            return sum(r * f for r, f in zip(
-                self.electrolyzer_rated_kg_per_hr, self._ez_frac)) / step_factor
-        budgets = {}
-        for t_idx in range(len(self.train_fill_line_ids)):
-            budgets[t_idx] = sum(
-                r * f for r, f, t in zip(
-                    self.electrolyzer_rated_kg_per_hr,
-                    self._ez_frac, self.train_of_electrolyzer)
-                if t == t_idx) / step_factor
-        return budgets
-
-    def n_filling(self): return sum(1 for c in self.compressors if c.active is not None)
-    def n_docked(self): return len(self.shared_docked)
-    def n_fill_lines_occupied(self): return self.n_docked() + self.n_filling()
-    def n_fill_lines_up(self): return sum(1 for u in self._fill_line_up if u)
-    def fill_line_slots_free(self): return self.n_fill_lines_up() - self.n_fill_lines_occupied()
-    def n_external(self): return len(self.external_queue)
-
-    def dock_from_external(self, step):
-        if self.trains is not None:
-            self._dock_from_external_trains(step)
-        elif self.comp_fill_line_ids is not None:
-            self._dock_from_external_dedicated(step)
-        else:
-            while self.fill_line_slots_free() > 0 and self.external_queue:
-                c = self.external_queue.popleft()
-                c.dock_step = step
-                self.shared_docked.append((c, None))
-
-    def _slot_pool_free(self, slot_ids):
-        occupied = sum(1 for c, a in self.shared_docked
-                       if a is not None and set(a) == set(slot_ids))
-        occupied += sum(1 for comp in self.compressors
-                        if comp.active is not None
-                        and self.comp_fill_line_ids.get(comp.compressor_id) == slot_ids)
-        return sum(1 for s in slot_ids if self._fill_line_up[s]) - occupied
-
-    def _dock_from_external_dedicated(self, step):
-        progressed = True
-        while progressed and self.external_queue:
-            progressed = False
-            for cid in sorted(self.comp_fill_line_ids, key=self._dedicated_pool_load):
-                slot_ids = self.comp_fill_line_ids[cid]
-                if self._slot_pool_free(slot_ids) > 0 and self.external_queue:
-                    c = self.external_queue.popleft()
-                    c.dock_step = step
-                    self.shared_docked.append((c, slot_ids))
-                    progressed = True
-                    break
-
-    def _dedicated_pool_load(self, comp_id):
-        slot_ids = self.comp_fill_line_ids[comp_id]
-        return (sum(1 for c, a in self.shared_docked
-                    if a is not None and set(a) == set(slot_ids))
-                + (1 if self.compressors[comp_id].active is not None else 0))
-
-    def _dock_from_external_trains(self, step):
-        progressed = True
-        while progressed and self.external_queue:
-            progressed = False
-            for t_idx in sorted(range(len(self.train_fill_line_ids)),
-                                  key=self._train_load):
-                slot_ids = self.train_fill_line_ids[t_idx]
-                if self._slot_pool_free(slot_ids) > 0 and self.external_queue:
-                    c = self.external_queue.popleft()
-                    c.dock_step = step
-                    self.shared_docked.append((c, slot_ids))
-                    progressed = True
-                    break
-
-    def _train_load(self, t_idx):
-        slot_ids = self.train_fill_line_ids[t_idx]
-        return (sum(1 for c, a in self.shared_docked
-                    if a is not None and set(a) == set(slot_ids))
-                + sum(1 for comp in self.compressors
-                      if comp.active is not None
-                      and self.train_of_compressor[comp.compressor_id] == t_idx))
-
-    def assign_idle_compressors(self, step):
-        for comp in self.compressors:
-            if comp.active is not None or not comp.reliability_up:
-                continue
-            if self.comp_fill_line_ids is None:
-                eligible = [c for c, a in self.shared_docked]
-            else:
-                my_slots = set(self.comp_fill_line_ids[comp.compressor_id])
-                eligible = [c for c, a in self.shared_docked
-                             if a is not None and set(a) == my_slots]
-            if not eligible:
-                continue
-            next_c = min(eligible, key=lambda c: c.required_fill())
-            self.shared_docked = [(c, a) for c, a in self.shared_docked if c is not next_c]
-            next_c.start_fill_step = step
-            next_c.compressor_id   = comp.compressor_id
-            comp.active = next_c
-
-    def admit_all(self, step):
-        self.dock_from_external(step)
-        self.assign_idle_compressors(step)
-
-    def fill_containers(self):
-        base_energy = self.base_power_kw * (self.step_minutes / 60)
-        def active_remaining(comp):
-            return comp.active.required_fill() if comp.active else float("inf")
-        priority_order = sorted(self.compressors, key=active_remaining)
-        total_dispensed_step = 0.0
-        pressures  = []
-        energy_kwh = base_energy
-        if self.trains is None:
-            remaining_by_group = {None: self.electrolyzer_step_kg}
-            group_of_comp = {c.compressor_id: None for c in self.compressors}
-        else:
-            remaining_by_group = dict(self.electrolyzer_step_kg)
-            group_of_comp = dict(self.train_of_compressor)
-        for comp in priority_order:
-            group     = group_of_comp[comp.compressor_id]
-            remaining = remaining_by_group[group]
-            budget    = min(comp.max_flow_per_step, remaining)
-            dispensed, pressure = comp.fill_step(budget)
-            remaining_by_group[group] = max(remaining - dispensed, 0.0)
-            if dispensed > 0:
-                energy_kwh += (comp.compression_energy_kwh(dispensed, pressure)
-                               + dispensed * self.electrolyzer_energy_kwh_per_kg)
-                pressures.append(pressure)
-            total_dispensed_step += dispensed
-        self.total_dispensed += total_dispensed_step
-        return max(pressures) if pressures else 30.0, energy_kwh
-
-    def collect_completed(self, step):
-        done = []
-        for comp in self.compressors:
-            if comp.active is not None and comp.active.full:
-                comp.active.completion_step = step
-                done.append(comp.active)
-                comp.active = None
-        return done
-
-    def _reset(self):
-        self.total_dispensed = 0.0
-        self.external_queue.clear()
-        self.shared_docked.clear()
-        for comp in self.compressors:
-            comp.total_dispensed = 0.0
-            comp.active = None
-            comp.reliability_up = True
-        self._ez_frac = [1.0] * len(self.electrolyzer_rated_kg_per_hr)
-        self._fill_line_up = [True] * self.n_fill_lines
-        self.electrolyzer_step_kg = self._compute_electrolyzer_step_kg()
+    fig.add_hline(y=0, line_color="black", line_width=1)
+    fig.update_layout(
+        **_LAYOUT, height=480, barmode="relative",
+        title=f"Annualised Revenue vs. Cost by Staff Schedule{title_suffix}",
+        yaxis=dict(title="kr / year", tickformat=",.0f"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    return fig
 
 
-def choose_container_type(types):
-    r = random.random()
-    cumulative = 0.0
-    for t in types:
-        cumulative += t.fleet_fraction
-        if r <= cumulative:
-            return t
-    return types[-1]
+# ──────────────────────────────────────────────────────────────
+# 3. Waterfall — single schedule build-up
+# ──────────────────────────────────────────────────────────────
+
+def plot_waterfall(row, title=None):
+    rev   = row["revenue_kr_annual"]
+    staff = row["staff_cost_kr_annual"]
+    queue = row["queue_cost_kr_annual"]
+
+    fig = go.Figure(go.Waterfall(
+        x=["Revenue", "Staff cost", "Queue cost", "Net result"],
+        measure=["absolute", "relative", "relative", "total"],
+        y=[rev, -staff, -queue, 0],
+        text=[_fmt_kr(rev), _fmt_kr(-staff), _fmt_kr(-queue),
+              _fmt_kr(rev - staff - queue)],
+        textposition="outside",
+        textfont=dict(size=12, color=_NET),
+        connector=dict(line=dict(color="#888", width=1, dash="dot")),
+        increasing=dict(marker_color=_REVENUE),
+        decreasing=dict(marker_color=_QUEUE),
+        totals=dict(marker_color=_NET),
+        hovertemplate="%{x}: %{y:,.0f} kr/yr<extra></extra>",
+    ))
+
+    label = row.get("schedule_label", "") if hasattr(row, "get") else row["schedule_label"]
+    fig.update_layout(
+        **_LAYOUT, height=450, showlegend=False,
+        title=title or f"Net Result Build-up — {label}",
+        yaxis=dict(title="kr / year", tickformat=",.0f"),
+    )
+    return fig
 
 
-class StaffSchedule:
-    def __init__(self, manned=True, weekday_hours="8-20", weekend="open"):
-        self.manned = manned
-        if not manned:
-            self._weekday = (0, 24)
-            self._weekend_open = True
-        else:
-            if weekday_hours == "24/7":
-                self._weekday = (0, 24)
-            else:
-                start, end = weekday_hours.split("-")
-                self._weekday = (int(start), int(end))
-            self._weekend_open = (weekend == "open")
+# ──────────────────────────────────────────────────────────────
+# 4. Waterfall grid — all schedules side by side
+# ──────────────────────────────────────────────────────────────
 
-    def is_manned(self, step, steps_per_day):
-        if not self.manned:
-            return False
-        day  = step // steps_per_day
-        frac = (step % steps_per_day) / steps_per_day
-        hour = frac * 24
-        is_weekend = (day % 7) in (5, 6)
-        if is_weekend:
-            return self._weekend_open
-        return self._weekday[0] <= hour < self._weekday[1]
+def plot_waterfall_grid(summary_df, title_suffix=""):
+    n = len(summary_df)
+    labels = summary_df["schedule_label"].astype(str).tolist()
 
+    fig = make_subplots(rows=1, cols=n, subplot_titles=labels, shared_yaxes=True)
 
-class ArrivalPattern:
-    def __init__(self, pattern_type="uniform", peak_hour=8.0, peak_hour_2=16.0,
-                 peak_width_hours=3.0, peak_weight=0.5):
-        self.pattern_type      = pattern_type
-        self.peak_hour         = peak_hour
-        self.peak_hour_2       = peak_hour_2
-        self.peak_width_hours  = peak_width_hours
-        self.peak_weight       = peak_weight
+    for i, (_, row) in enumerate(summary_df.iterrows()):
+        rev   = row["revenue_kr_annual"]
+        staff = row["staff_cost_kr_annual"]
+        queue = row["queue_cost_kr_annual"]
 
-    def rate_at_hour(self, hour):
-        import numpy as np
-        if self.pattern_type == "uniform":
-            return 1.0
-        def gaussian(h, mu, sigma):
-            return np.exp(-0.5 * ((h - mu) / sigma) ** 2)
-        sigma = self.peak_width_hours / 2.355
-        if self.pattern_type == "single_peak":
-            return gaussian(hour, self.peak_hour, sigma) + 0.05
-        w = self.peak_weight
-        return (w * gaussian(hour, self.peak_hour, sigma)
-                + (1 - w) * gaussian(hour, self.peak_hour_2, sigma) + 0.05)
+        fig.add_trace(go.Waterfall(
+            x=["Rev", "Staff", "Queue", "Net"],
+            measure=["absolute", "relative", "relative", "total"],
+            y=[rev, -staff, -queue, 0],
+            text=[_fmt_kr(rev), _fmt_kr(-staff), _fmt_kr(-queue),
+                  _fmt_kr(rev - staff - queue)],
+            textposition="outside", textfont=dict(size=9),
+            connector=dict(line=dict(color="#888", width=0.8, dash="dot")),
+            increasing=dict(marker_color=_REVENUE),
+            decreasing=dict(marker_color=_QUEUE),
+            totals=dict(marker_color=_NET),
+            showlegend=False,
+        ), row=1, col=i + 1)
+
+    fig.update_layout(
+        **_LAYOUT, height=450,
+        title_text=f"Net Result Build-up — All Schedules{title_suffix}",
+    )
+    fig.update_yaxes(tickformat=",.0f", row=1, col=1)
+    return fig
 
 
-def run_simulation(container_types, plant, avg_arrivals_per_day, days, step_minutes,
-                   random_seed=17, schedule=None, arrival_pattern=None,
-                   reliability_model=None):
-    import numpy as np
-    random.seed(random_seed)
-    np.random.seed(random_seed)
+# ──────────────────────────────────────────────────────────────
+# 5. Sensitivity — net result vs arrival rate
+# ──────────────────────────────────────────────────────────────
 
-    if schedule is None:
-        schedule = StaffSchedule(manned=True)
-    if arrival_pattern is None:
-        arrival_pattern = ArrivalPattern(pattern_type="uniform")
+def plot_sensitivity(econ_df, schedule_order, value_col="net_kr_annual",
+                     value_label="Net result (kr/year)",
+                     title="Net Annual Result vs. Arrival Rate",
+                     filters=None):
+    df = econ_df.copy()
+    if filters:
+        for col, val in filters.items():
+            if col in df.columns and val is not None:
+                df = df[df[col] == val]
 
-    N_step_day          = int(24 * 60 / step_minutes)
-    TIMESTEPS           = N_step_day * days
-    base_lambda         = avg_arrivals_per_day / N_step_day
+    sens = (
+        df.groupby(["arrival_rate", "schedule_label"])[value_col]
+        .agg(["mean", "std", "count"])
+        .reset_index()
+    )
+    sens["se95"] = 1.96 * sens["std"] / np.sqrt(sens["count"].clip(lower=1))
 
-    plant._reset()
+    fig = go.Figure()
+    for i, label in enumerate(schedule_order):
+        sub = sens[sens["schedule_label"] == label].sort_values("arrival_rate")
+        color = _PALETTE[i % len(_PALETTE)]
 
-    completed = []
-    external_queue_log = []
-    docked_log         = []
-    filling_log        = []
-    pressure_log       = []
-    production_log     = []
-    energy_log         = []
-    arrival_log        = []
-    manned_log         = []
-    ez_availability_log  = []
-    comp_up_log          = []
-    fill_lines_up_log    = []
-    pm_active_log        = []
+        if len(sub) > 1 and sub["std"].notna().any():
+            fig.add_trace(go.Scatter(
+                x=list(sub["arrival_rate"]) + list(sub["arrival_rate"][::-1]),
+                y=list(sub["mean"] + sub["se95"]) + list((sub["mean"] - sub["se95"])[::-1]),
+                fill="toself", fillcolor=color, opacity=0.1,
+                line=dict(width=0), showlegend=False, hoverinfo="skip",
+            ))
 
-    comp_filling_log = [[] for _ in plant.compressors]
+        fig.add_trace(go.Scatter(
+            x=sub["arrival_rate"], y=sub["mean"],
+            mode="lines+markers", name=label,
+            line=dict(color=color, width=2.5),
+            marker=dict(color=color, size=8, symbol=_MARKERS[i % len(_MARKERS)]),
+            hovertemplate=(f"{label}<br>Arrivals/day: %{{x}}<br>"
+                           f"{value_label}: %{{y:,.0f}}<extra></extra>"),
+        ))
 
-    for step in range(TIMESTEPS):
-        if reliability_model is not None:
-            cap_state = reliability_model.step(step, step_minutes)
-            plant.apply_reliability_state(cap_state)
-            n_ez = max(len(cap_state.ez_frac), 1)
-            ez_availability_log.append(sum(cap_state.ez_frac) / n_ez)
-            comp_up_log.append(list(cap_state.comp_up))
-            fill_lines_up_log.append(cap_state.n_fill_lines_up())
-            pm_active_log.append(cap_state.any_pm)
-        else:
-            ez_availability_log.append(1.0)
-            comp_up_log.append([True] * len(plant.compressors))
-            fill_lines_up_log.append(plant.n_fill_lines)
-            pm_active_log.append(False)
+    fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
+    fig.update_layout(
+        **_LAYOUT, height=480,
+        title=title,
+        xaxis=dict(title="Average arrivals per day"),
+        yaxis=dict(title=value_label, tickformat=",.0f"),
+        legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="left", x=1.02),
+    )
+    return fig
 
-        is_manned = schedule.is_manned(step, N_step_day)
-        manned_log.append(int(is_manned))
 
-        hour = ((step % N_step_day) / N_step_day) * 24
-        rate_multiplier = arrival_pattern.rate_at_hour(hour)
-        lam = base_lambda * rate_multiplier
-        n_arrivals = np.random.poisson(lam)
-        for _ in range(n_arrivals):
-            ct = choose_container_type(container_types)
-            plant.external_queue.append(Container(ct, step))
-        arrival_log.append(n_arrivals)
+# ──────────────────────────────────────────────────────────────
+# 5b. Sensitivity by arrival pattern
+# ──────────────────────────────────────────────────────────────
 
-        if is_manned or not plant.manned if hasattr(plant, 'manned') else is_manned:
-            plant.admit_all(step)
-        elif not schedule.manned:
-            plant.admit_all(step)
-        else:
-            plant.assign_idle_compressors(step)
+def plot_sensitivity_by_pattern(econ_df, pattern_order, value_col="net_kr_annual",
+                                value_label="Net result (kr/year)",
+                                schedule_label=None, title=None, filters=None):
+    df = econ_df.copy()
+    if schedule_label is not None:
+        df = df[df["schedule_label"] == schedule_label]
+    if filters:
+        for col, val in filters.items():
+            if col in df.columns and val is not None:
+                df = df[df[col] == val]
 
-        pressure, energy = plant.fill_containers()
-        done = plant.collect_completed(step)
-        completed.extend(done)
+    sens = (
+        df.groupby(["arrival_rate", "arrival_pattern_label"])[value_col]
+        .agg(["mean", "std", "count"])
+        .reset_index()
+    )
+    sens["se95"] = 1.96 * sens["std"] / np.sqrt(sens["count"].clip(lower=1))
 
-        external_queue_log.append(plant.n_external())
-        docked_log.append(plant.n_docked())
-        filling_log.append(plant.n_filling())
-        pressure_log.append(pressure)
-        production_log.append(plant.electrolyzer_step_kg
-                               if isinstance(plant.electrolyzer_step_kg, float)
-                               else sum(plant.electrolyzer_step_kg.values()))
-        energy_log.append(energy)
-        for j, comp in enumerate(plant.compressors):
-            comp_filling_log[j].append(1 if comp.active is not None else 0)
+    fig = go.Figure()
+    for i, label in enumerate(pattern_order):
+        sub = sens[sens["arrival_pattern_label"] == label].sort_values("arrival_rate")
+        color = _PALETTE[i % len(_PALETTE)]
 
-    queue_log = external_queue_log
+        if len(sub) > 1 and sub["std"].notna().any():
+            fig.add_trace(go.Scatter(
+                x=list(sub["arrival_rate"]) + list(sub["arrival_rate"][::-1]),
+                y=list(sub["mean"] + sub["se95"]) + list((sub["mean"] - sub["se95"])[::-1]),
+                fill="toself", fillcolor=color, opacity=0.1,
+                line=dict(width=0), showlegend=False, hoverinfo="skip",
+            ))
 
-    return {
-        "completed":          completed,
-        "external_queue_log": external_queue_log,
-        "docked_log":         docked_log,
-        "filling_log":        filling_log,
-        "queue_log":          queue_log,
-        "manned_log":         manned_log,
-        "comp_filling_log":   comp_filling_log,
-        "pressure_log":       pressure_log,
-        "production_log":     production_log,
-        "energy_log":         energy_log,
-        "arrival_log":        arrival_log,
-        "total_dispensed":    plant.total_dispensed,
-        "ez_availability_log":  ez_availability_log,
-        "comp_up_log":          comp_up_log,
-        "fill_lines_up_log":    fill_lines_up_log,
-        "pm_active_log":        pm_active_log,
-        "reliability_summary":  reliability_model.summary() if reliability_model else None,
-    }
+        fig.add_trace(go.Scatter(
+            x=sub["arrival_rate"], y=sub["mean"],
+            mode="lines+markers", name=label,
+            line=dict(color=color, width=2.5),
+            marker=dict(color=color, size=8, symbol=_MARKERS[i % len(_MARKERS)]),
+            hovertemplate=(f"{label}<br>Arrivals/day: %{{x}}<br>"
+                           f"{value_label}: %{{y:,.0f}}<extra></extra>"),
+        ))
+
+    fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
+    default_title = f"{value_label.split(' (')[0]} vs. Arrival Rate, by Timing Pattern"
+    if schedule_label:
+        default_title += f"  (schedule = {schedule_label})"
+    fig.update_layout(
+        **_LAYOUT, height=480,
+        title=title or default_title,
+        xaxis=dict(title="Average arrivals per day"),
+        yaxis=dict(title=value_label, tickformat=",.0f"),
+        legend=dict(title="Arrival pattern"),
+    )
+    return fig
+
+
+# ──────────────────────────────────────────────────────────────
+# 5c. Volume x timing grid
+# ──────────────────────────────────────────────────────────────
+
+def plot_volume_timing_grid(econ_df, arrival_rates, pattern_order,
+                            value_col="net_kr_annual",
+                            value_label="Net result (kr/year)",
+                            schedule_label=None, title=None):
+    df = econ_df
+    if schedule_label is not None:
+        df = df[df["schedule_label"] == schedule_label]
+
+    grp = (
+        df.groupby(["arrival_rate", "arrival_pattern_label"])[value_col]
+        .mean()
+        .reset_index()
+    )
+
+    fig = go.Figure()
+    for i, pattern in enumerate(pattern_order):
+        vals = []
+        for rate in arrival_rates:
+            match = grp[(grp["arrival_rate"] == rate)
+                        & (grp["arrival_pattern_label"] == pattern)]
+            vals.append(match[value_col].iloc[0] if not match.empty else np.nan)
+        fig.add_trace(go.Bar(
+            x=[str(r) for r in arrival_rates], y=vals, name=pattern,
+            marker_color=_PALETTE[i % len(_PALETTE)],
+            hovertemplate=(f"{pattern}<br>Rate: %{{x}}/day<br>"
+                           f"{value_label}: %{{y:,.0f}}<extra></extra>"),
+        ))
+
+    fig.add_hline(y=0, line_color="black", line_width=1)
+    default_title = "Volume vs. Timing"
+    if schedule_label:
+        default_title += f"  (schedule = {schedule_label})"
+    fig.update_layout(
+        **_LAYOUT, height=450, barmode="group",
+        title=title or default_title,
+        xaxis=dict(title="Average arrivals per day"),
+        yaxis=dict(title=value_label, tickformat=",.0f"),
+        legend=dict(title="Arrival pattern"),
+    )
+    return fig

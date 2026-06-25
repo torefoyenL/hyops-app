@@ -226,6 +226,7 @@ def generate_fmea(topology):
 # ============================================================
 
 st.sidebar.title("⚙️ HyOps Configuration")
+#1
 
 # ── Topology ─────────────────────────────────────────────────
 with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
@@ -892,9 +893,7 @@ with tab_ops:
             with st.expander("Economics"):
                 import pandas as pd
                 st.dataframe(pd.DataFrame([econ]).T.rename(columns={0: "value"}), use_container_width=True)
-                with silence_show():
-                    ep.plot_waterfall(econ)
-                show_figs()
+                st.plotly_chart(ep.plot_waterfall(econ), use_container_width=True)
             with st.expander("Operations plots"):
                 with silence_show():
                     rpo.plot_results(result)
@@ -946,13 +945,9 @@ with tab_ops:
                 summary = (summary.set_index("schedule_label")
                            .reindex(sched_order).dropna(how="all").reset_index())
                 st.subheader("Revenue vs. cost breakdown")
-                with silence_show():
-                    ep.plot_stacked_bar(summary)
-                show_figs()
+                st.plotly_chart(ep.plot_stacked_bar(summary), use_container_width=True)
                 st.subheader("Net result spread")
-                with silence_show():
-                    ep.plot_net_result_spread(econ_df_cmp, sched_order, float(avg_arrivals), 1)
-                show_figs()
+                st.plotly_chart(ep.plot_net_result_spread(econ_df_cmp, sched_order, float(avg_arrivals), 1), use_container_width=True)
 
 
 # ────────────────────────────────────────────────────────────
@@ -1055,16 +1050,13 @@ with tab_econ:
                 n_seeds = (headline.groupby("schedule_label")["seed"].nunique().max()
                            if "seed" in headline.columns else len(headline))
                 st.subheader(f"Net result spread — {hr} arrivals/day")
-                fig, _ = ep.plot_net_result_spread(headline, sched_order, hr, n_seeds)
-                st.pyplot(fig)
+                st.plotly_chart(ep.plot_net_result_spread(headline, sched_order, hr, n_seeds), use_container_width=True)
                 st.subheader("Revenue vs. cost")
-                fig2, _ = ep.plot_stacked_bar(summary)
-                st.pyplot(fig2)
+                st.plotly_chart(ep.plot_stacked_bar(summary), use_container_width=True)
                 st.subheader("Sensitivity vs. arrival rate")
                 all_s   = [s for s in ALL_SCHEDULES if s in filtered["schedule_label"].unique()]
                 filters = {"reliability_label": rel_f} if rel_f else None
-                fig3, _ = ep.plot_sensitivity(filtered, all_s, filters=filters)
-                st.pyplot(fig3)
+                st.plotly_chart(ep.plot_sensitivity(filtered, all_s, filters=filters), use_container_width=True)
 
 
 # ────────────────────────────────────────────────────────────
