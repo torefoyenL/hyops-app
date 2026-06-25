@@ -895,9 +895,8 @@ with tab_ops:
                 st.dataframe(pd.DataFrame([econ]).T.rename(columns={0: "value"}), use_container_width=True)
                 st.plotly_chart(ep.plot_waterfall(econ), use_container_width=True)
             with st.expander("Operations plots"):
-                with silence_show():
-                    rpo.plot_results(result)
-                show_figs()
+                for fig in rpo.plot_results(result):
+                    st.plotly_chart(fig, use_container_width=True)
 
     with sub_schedule:
         st.header("Schedule Comparison")

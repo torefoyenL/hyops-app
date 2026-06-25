@@ -227,11 +227,10 @@ def print_kpis(kpis):
 # ============================================================
 
 def plot_results(results):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.ticker import MaxNLocator
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
     import numpy as np
+
     step_minutes      = results["step_minutes"]
     pressure_log      = results["pressure_log"]
     production_log    = results["production_log"]
@@ -245,195 +244,217 @@ def plot_results(results):
 
     TIMESTEPS    = len(pressure_log)
     time_minutes = np.arange(TIMESTEPS) * step_minutes
+    _LAYOUT = dict(plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+                   margin=dict(l=50, r=50, t=50, b=50), hovermode="x unified")
+
+    figs = []
 
     # =========================================================
-    # 1️⃣  Pressure + Production
+    # 1  Pressure + Production (dual y-axis)
     # =========================================================
-    fig, ax1 = plt.subplots(figsize=(14, 5))
-    l1, = ax1.plot(time_minutes, pressure_log,
-                   color="blue", linewidth=1.5, label="Pressure (bar)")
-    ax1.set_xlabel("Time (minutes)")
-    ax1.set_ylabel("Pressure (bar)", color="blue")
-    ax1.tick_params(axis='y', labelcolor="blue")
-    ax1.grid(True, alpha=0.3)
-    ax2 = ax1.twinx()
-    l2, = ax2.plot(time_minutes, production_log,
-                   color="green", linestyle="--", linewidth=1.5,
-                   label="Production (kg/h)")
-    ax2.set_ylabel("Production (kg/h)", color="green")
-    ax2.tick_params(axis='y', labelcolor="green")
-    ax1.legend([l1, l2], [l1.get_label(), l2.get_label()], loc="upper left")
-    ax1.set_title("Plant Pressure and Production Rate")
-    fig.tight_layout()
-    plt.show()
+    fig1 = make_subplots(specs=[[{"secondary_y": True}]])
+    fig1.add_trace(go.Scatter(
+        x=time_minutes, y=pressure_log, mode="lines",
+        line=dict(color="blue", width=1.5), name="Pressure (bar)",
+        hovertemplate="Pressure: %{y:.1f} bar<extra></extra>",
+    ), secondary_y=False)
+    fig1.add_trace(go.Scatter(
+        x=time_minutes, y=production_log, mode="lines",
+        line=dict(color="green", width=1.5, dash="dash"), name="Production (kg/h)",
+        hovertemplate="Production: %{y:.2f} kg/h<extra></extra>",
+    ), secondary_y=True)
+    fig1.update_layout(
+        **_LAYOUT, height=400, title="Plant Pressure and Production Rate",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        xaxis=dict(title="Time (minutes)", rangeslider=dict(visible=True, thickness=0.06)),
+    )
+    fig1.update_yaxes(title_text="Pressure (bar)", color="blue", secondary_y=False)
+    fig1.update_yaxes(title_text="Production (kg/h)", color="green", secondary_y=True)
+    figs.append(fig1)
 
     # =========================================================
-    # 2️⃣  3-Zone Queue Overview (plant level)
+    # 2  3-Zone Queue Overview
     # =========================================================
-    fig, ax = plt.subplots(figsize=(14, 5))
-
-    ax.step(time_minutes, ext_log, where="post",
-            color="red", linewidth=2, label="External queue (outside)")
+    fig2 = go.Figure()
+    fig2.add_trace(go.Scatter(
+        x=time_minutes, y=ext_log, mode="lines", line_shape="hv",
+        line=dict(color="red", width=2), name="External queue (outside)",
+        hovertemplate="External: %{y}<extra></extra>",
+    ))
     if docked_log:
-        ax.step(time_minutes, docked_log, where="post",
-                color="orange", linewidth=2, linestyle="--",
-                label="Docked — waiting for compressor")
-    ax.step(time_minutes, filling_log, where="post",
-            color="steelblue", linewidth=2, linestyle=":",
-            label="Filling (compressor active)")
-
-    # Arrival dots
+        fig2.add_trace(go.Scatter(
+            x=time_minutes, y=docked_log, mode="lines", line_shape="hv",
+            line=dict(color="orange", width=2, dash="dash"),
+            name="Docked — waiting for compressor",
+            hovertemplate="Docked: %{y}<extra></extra>",
+        ))
+    fig2.add_trace(go.Scatter(
+        x=time_minutes, y=filling_log, mode="lines", line_shape="hv",
+        line=dict(color="steelblue", width=2, dash="dot"),
+        name="Filling (compressor active)",
+        hovertemplate="Filling: %{y}<extra></extra>",
+    ))
     arrival_times = [time_minutes[i] for i in range(TIMESTEPS) if arrival_log[i] > 0]
     if arrival_times:
-        ax.scatter(arrival_times, [0] * len(arrival_times),
-                   color="black", s=40, zorder=5, label="Arrivals", marker="|")
-
-    ax.set_xlabel("Time (minutes)")
-    ax.set_ylabel("Number of Containers")
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.legend(loc="upper left")
-    ax.grid(True, alpha=0.3)
-    ax.set_title("Container Zones Over Time: External → Docked → Filling")
-    fig.tight_layout()
-    plt.show()
+        fig2.add_trace(go.Scatter(
+            x=arrival_times, y=[0]*len(arrival_times), mode="markers",
+            marker=dict(color="black", size=8, symbol="line-ns-open"),
+            name="Arrivals", hovertemplate="Arrival at %{x:.0f} min<extra></extra>",
+        ))
+    fig2.update_layout(
+        **_LAYOUT, height=400,
+        title="Container Zones Over Time: External → Docked → Filling",
+        xaxis=dict(title="Time (minutes)", rangeslider=dict(visible=True, thickness=0.06)),
+        yaxis=dict(title="Number of Containers", dtick=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
+    figs.append(fig2)
 
     # =========================================================
-    # 3️⃣  Per-Compressor Filling Utilisation
-    #     (Shared-line model: external queue and docked pool are
-    #      plant-wide, not per-compressor)
+    # 3  Per-Compressor Filling + Utilisation Bar
     # =========================================================
     if comp_filling_log is not None:
         n_comp = len(comp_filling_log)
-        comp_colors = ["steelblue", "mediumorchid"]
+        comp_colors = ["steelblue", "mediumorchid", "#e6994d", "#5dade2",
+                       "#a569bd", "#48c9b0"]
 
-        fig, ax = plt.subplots(figsize=(14, 4))
+        fig3 = go.Figure()
         for i in range(n_comp):
-            ax.step(time_minutes, comp_filling_log[i], where="post",
-                    color=comp_colors[i % len(comp_colors)],
-                    linewidth=1.5, alpha=0.85,
-                    label=f"Compressor {i} filling (0/1)")
-        ax.set_xlabel("Time (minutes)")
-        ax.set_ylabel("Filling (1 = active)")
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.set_title("Per-Compressor Filling Activity (Shared Fill Lines)")
-        ax.legend(loc="upper left")
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-        plt.show()
+            fig3.add_trace(go.Scatter(
+                x=time_minutes, y=comp_filling_log[i], mode="lines", line_shape="hv",
+                line=dict(color=comp_colors[i % len(comp_colors)], width=1.5),
+                opacity=0.85, name=f"Compressor {i} filling (0/1)",
+                hovertemplate=f"Comp {i}: %{{y}}<extra></extra>",
+            ))
+        fig3.update_layout(
+            **_LAYOUT, height=350,
+            title="Per-Compressor Filling Activity (Shared Fill Lines)",
+            xaxis=dict(title="Time (minutes)", rangeslider=dict(visible=True, thickness=0.06)),
+            yaxis=dict(title="Filling (1 = active)", dtick=1),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        )
+        figs.append(fig3)
 
-        # ---- Bar: avg filling utilisation per compressor ----
-        fig, ax = plt.subplots(figsize=(6, 4))
-        x         = np.arange(n_comp)
-        avg_fill  = [np.mean(comp_filling_log[i]) for i in range(n_comp)]
-        bars = ax.bar(x, avg_fill, color=comp_colors[:n_comp], alpha=0.85, edgecolor="black")
-        ax.bar_label(bars, fmt="{:.1%}", padding=3)
-        ax.set_xticks(x)
-        ax.set_xticklabels([f"Compressor {i}" for i in range(n_comp)])
-        ax.set_ylabel("Fill utilisation (fraction of time active)")
-        ax.set_ylim(0, 1.15)
-        ax.set_title("Average Fill Utilisation per Compressor")
-        ax.grid(True, alpha=0.3, axis='y')
-        fig.tight_layout()
-        plt.show()
+        avg_fill = [np.mean(comp_filling_log[i]) for i in range(n_comp)]
+        fig3b = go.Figure()
+        fig3b.add_trace(go.Bar(
+            x=[f"Compressor {i}" for i in range(n_comp)], y=avg_fill,
+            marker_color=comp_colors[:n_comp],
+            text=[f"{v:.1%}" for v in avg_fill], textposition="outside",
+            hovertemplate="Comp %{x}<br>Utilisation: %{y:.1%}<extra></extra>",
+        ))
+        fig3b.update_layout(
+            **_LAYOUT, height=350,
+            title="Average Fill Utilisation per Compressor",
+            yaxis=dict(title="Fill utilisation (fraction of time active)", range=[0, 1.15]),
+        )
+        figs.append(fig3b)
 
     # =========================================================
-    # 4️⃣  Time Distribution Histograms — all 3 zones
+    # 4  Time Distribution Histograms — all 3 zones
     # =========================================================
-    ext_waits  = [(c.dock_step  - c.arrival_step)    * step_minutes
-                  for c in completed
-                  if c.dock_step is not None]
-    doc_waits  = [(c.start_fill_step - c.dock_step)  * step_minutes
+    ext_waits  = [max((c.dock_step - c.arrival_step) * step_minutes, 0)
+                  for c in completed if c.dock_step is not None]
+    doc_waits  = [max((c.start_fill_step - c.dock_step) * step_minutes, 0)
                   for c in completed
                   if c.dock_step is not None and c.start_fill_step is not None]
-    fill_times = [(c.completion_step - c.start_fill_step) * step_minutes
-                  for c in completed
-                  if c.start_fill_step is not None]
+    fill_times = [max((c.completion_step - c.start_fill_step) * step_minutes, 0)
+                  for c in completed if c.start_fill_step is not None]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-
+    fig4 = make_subplots(rows=1, cols=3,
+        subplot_titles=("External Wait<br>(outside filling area)",
+                        "Docked Wait<br>(parked, compressor busy)",
+                        "Fill Time<br>(compressor pumping)"),
+        horizontal_spacing=0.08)
     if ext_waits:
-        axes[0].hist(ext_waits,  bins=25, color="firebrick",  edgecolor="black", alpha=0.85)
-    axes[0].set_title("External Wait\n(outside filling area)")
-    axes[0].set_xlabel("Minutes")
-    axes[0].set_ylabel("Containers")
-    axes[0].grid(True, alpha=0.3)
-
+        fig4.add_trace(go.Histogram(
+            x=ext_waits, nbinsx=25, marker_color="firebrick", opacity=0.85,
+            name="External", hovertemplate="Bin: %{x:.0f} min<br>Count: %{y}<extra></extra>",
+        ), row=1, col=1)
     if doc_waits:
-        axes[1].hist(doc_waits,  bins=25, color="darkorange", edgecolor="black", alpha=0.85)
-    axes[1].set_title("Docked Wait\n(parked, compressor busy)")
-    axes[1].set_xlabel("Minutes")
-    axes[1].grid(True, alpha=0.3)
-
+        fig4.add_trace(go.Histogram(
+            x=doc_waits, nbinsx=25, marker_color="darkorange", opacity=0.85,
+            name="Docked", hovertemplate="Bin: %{x:.0f} min<br>Count: %{y}<extra></extra>",
+        ), row=1, col=2)
     if fill_times:
-        axes[2].hist(fill_times, bins=25, color="steelblue",  edgecolor="black", alpha=0.85)
-    axes[2].set_title("Fill Time\n(compressor pumping)")
-    axes[2].set_xlabel("Minutes")
-    axes[2].grid(True, alpha=0.3)
-
-    fig.suptitle("Time Distribution by Zone", fontsize=13)
-    fig.tight_layout()
-    plt.show()
+        fig4.add_trace(go.Histogram(
+            x=fill_times, nbinsx=25, marker_color="steelblue", opacity=0.85,
+            name="Fill", hovertemplate="Bin: %{x:.0f} min<br>Count: %{y}<extra></extra>",
+        ), row=1, col=3)
+    fig4.update_layout(**_LAYOUT, height=370, title_text="Time Distribution by Zone",
+                       showlegend=False)
+    fig4.update_xaxes(title_text="Minutes")
+    fig4.update_yaxes(title_text="Containers", col=1)
+    figs.append(fig4)
 
     # =========================================================
-    # 5️⃣  Box plots by container type — all 3 zones
+    # 5  Box plots by container type — all 3 zones
     # =========================================================
     types = sorted({c.container_type.name for c in completed})
 
     if len(types) > 1:
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-        zone_data = [
-            ("External Wait",  "firebrick",
-             [[max((c.dock_step - c.arrival_step)*step_minutes, 0)
-               for c in completed if c.container_type.name == t and c.dock_step is not None]
-              for t in types]),
-            ("Docked Wait",    "darkorange",
-             [[max((c.start_fill_step - c.dock_step)*step_minutes, 0)
-               for c in completed
-               if c.container_type.name == t and c.dock_step is not None
-               and c.start_fill_step is not None]
-              for t in types]),
-            ("Fill Time",      "steelblue",
-             [[max((c.completion_step - c.start_fill_step)*step_minutes, 0)
-               for c in completed
-               if c.container_type.name == t and c.start_fill_step is not None]
-              for t in types]),
-        ]
-
-        for ax, (title, color, data) in zip(axes, zone_data):
-            bp = ax.boxplot(data, tick_labels=types, patch_artist=True,
-                            boxprops=dict(facecolor=color, alpha=0.6))
-            ax.set_title(title)
-            ax.set_ylabel("Minutes")
-            ax.grid(True, alpha=0.3, axis='y')
-
-        fig.suptitle("Time by Container Type and Zone", fontsize=13)
-        fig.tight_layout()
-        plt.show()
-
-    # =========================================================
-    # 6️⃣  Power
-    # =========================================================
-    plt.figure(figsize=(12, 4))
-    plt.plot(time_minutes, energy_log, color="black", linewidth=1.5, label="Power (kW)")
-    plt.title("Instantaneous Power Use")
-    plt.xlabel("Time (minutes)")
-    plt.ylabel("Power (kW)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
+        zone_colors = {"External Wait": "firebrick", "Docked Wait": "darkorange",
+                       "Fill Time": "steelblue"}
+        fig5 = make_subplots(rows=1, cols=3,
+            subplot_titles=("External Wait", "Docked Wait", "Fill Time"),
+            horizontal_spacing=0.08)
+        for col_idx, (zone_name, color) in enumerate(zone_colors.items(), 1):
+            for t in types:
+                if zone_name == "External Wait":
+                    vals = [max((c.dock_step - c.arrival_step)*step_minutes, 0)
+                            for c in completed
+                            if c.container_type.name == t and c.dock_step is not None]
+                elif zone_name == "Docked Wait":
+                    vals = [max((c.start_fill_step - c.dock_step)*step_minutes, 0)
+                            for c in completed
+                            if c.container_type.name == t and c.dock_step is not None
+                            and c.start_fill_step is not None]
+                else:
+                    vals = [max((c.completion_step - c.start_fill_step)*step_minutes, 0)
+                            for c in completed
+                            if c.container_type.name == t and c.start_fill_step is not None]
+                fig5.add_trace(go.Box(
+                    y=vals, name=t, marker_color=color, opacity=0.7,
+                    showlegend=(col_idx == 1),
+                    hovertemplate=f"{t}<br>%{{y:.0f}} min<extra></extra>",
+                ), row=1, col=col_idx)
+        fig5.update_layout(**_LAYOUT, height=400,
+                           title_text="Time by Container Type and Zone")
+        fig5.update_yaxes(title_text="Minutes", col=1)
+        figs.append(fig5)
 
     # =========================================================
-    # 7️⃣  Pressure Distribution
+    # 6  Power
     # =========================================================
-    plt.figure(figsize=(9, 4))
-    plt.hist(pressure_log, bins=30, color="skyblue", edgecolor="black")
-    plt.title("Plant Pressure Distribution")
-    plt.xlabel("Pressure (bar)")
-    plt.ylabel("Frequency")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
+    fig6 = go.Figure()
+    fig6.add_trace(go.Scatter(
+        x=time_minutes, y=energy_log, mode="lines",
+        line=dict(color="black", width=1.5), name="Power (kW)",
+        hovertemplate="Time: %{x:.0f} min<br>Power: %{y:.1f} kW<extra></extra>",
+    ))
+    fig6.update_layout(
+        **_LAYOUT, height=350, title="Instantaneous Power Use",
+        xaxis=dict(title="Time (minutes)", rangeslider=dict(visible=True, thickness=0.06)),
+        yaxis=dict(title="Power (kW)"),
+    )
+    figs.append(fig6)
+
+    # =========================================================
+    # 7  Pressure Distribution
+    # =========================================================
+    fig7 = go.Figure()
+    fig7.add_trace(go.Histogram(
+        x=pressure_log, nbinsx=30, marker_color="skyblue",
+        marker_line=dict(color="black", width=0.5),
+        hovertemplate="Pressure: %{x:.0f} bar<br>Count: %{y}<extra></extra>",
+        name="Pressure",
+    ))
+    fig7.update_layout(**_LAYOUT, height=350, title="Plant Pressure Distribution",
+                       xaxis=dict(title="Pressure (bar)"),
+                       yaxis=dict(title="Frequency"), showlegend=False)
+    figs.append(fig7)
+
+    return figs
 
 
 # ============================================================
