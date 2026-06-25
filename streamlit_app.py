@@ -75,6 +75,7 @@ def _ss_init():
         "staff_costs":   dict(_STAFF_DEFAULTS),
         "margin_kr":     30.0,
         "queue_cost_kr": 1500.0,
+        "container_cost_monthly": 0.0,
         "db_path":       "hydrogen_mc.duckdb",
         "tl_mc_results": None,
         "single_result": None,
