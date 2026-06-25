@@ -912,12 +912,16 @@ with tab_ops:
 
         # ── 3. Animated arrival scatter on the PDF ──────────────
         st.subheader("Simulated Arrivals Preview")
-        anim_speed = st.slider("Animation speed (ms per frame)", 50, 2000, 400, 50, key="anim_speed")
+        ac1, ac2, ac3 = st.columns(3)
+        anim_speed = ac1.slider("Animation speed (ms/frame)", 50, 2000, 400, 50, key="anim_speed")
+        arrival_seed = ac2.number_input("Arrival seed", min_value=0, value=42, step=1, key="arrival_seed")
+        container_seed = ac3.number_input("Container seed", min_value=0, value=7, step=1, key="container_seed")
 
         n_preview_days = 365
         n_frames = 50
         days_per_frame = max(n_preview_days // n_frames, 1)
-        rng = np.random.default_rng(42)
+        rng_arrivals = np.random.default_rng(int(arrival_seed))
+        rng_containers = np.random.default_rng(int(container_seed))
 
         # Fast generation: draw daily counts then sample hours from PDF
         fracs = np.array([ct.fleet_fraction for ct in _containers])
@@ -926,18 +930,18 @@ with tab_ops:
         hourly_cdf = np.cumsum(hourly_rates)
         hourly_cdf /= hourly_cdf[-1]
 
-        daily_counts = rng.poisson(float(avg_arrivals), size=n_preview_days)
+        daily_counts = rng_arrivals.poisson(float(avg_arrivals), size=n_preview_days)
         total_n = int(daily_counts.sum())
-        u_hours = rng.random(total_n)
+        u_hours = rng_arrivals.random(total_n)
         arrival_hours_all = np.interp(u_hours, hourly_cdf, np.linspace(0, 24, 1440))
-        u_types = rng.random(total_n)
+        u_types = rng_containers.random(total_n)
         type_idx = np.searchsorted(cum_fracs, u_types, side="right").clip(0, len(_containers) - 1)
         type_names = np.array([_containers[i].name for i in type_idx])
         arrival_days_all = np.repeat(np.arange(1, n_preview_days + 1), daily_counts)
 
         pdf_x, pdf_y = hours, pdf
         y_max = float(max(pdf_y))
-        jitter_all = rng.uniform(0, y_max * 0.15, size=total_n)
+        jitter_all = rng_arrivals.uniform(0, y_max * 0.15, size=total_n)
 
         base_traces = [go.Scatter(
             x=pdf_x, y=pdf_y, mode="lines",

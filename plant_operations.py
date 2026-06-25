@@ -428,7 +428,13 @@ def run_simulation(container_types, plant, avg_arrivals_per_day, days, step_minu
 
     N_step_day          = int(24 * 60 / step_minutes)
     TIMESTEPS           = N_step_day * days
-    base_lambda         = avg_arrivals_per_day / N_step_day
+
+    # Precompute normalised arrival profile so total expected arrivals
+    # equals avg_arrivals_per_day regardless of pattern shape.
+    _raw_profile = np.array([arrival_pattern.rate_at_hour((s / N_step_day) * 24)
+                             for s in range(N_step_day)])
+    _profile_sum = _raw_profile.sum()
+    arrival_lambda = _raw_profile * (avg_arrivals_per_day / _profile_sum)
 
     plant._reset()
 
@@ -466,9 +472,7 @@ def run_simulation(container_types, plant, avg_arrivals_per_day, days, step_minu
         is_manned = schedule.is_manned(step, N_step_day)
         manned_log.append(int(is_manned))
 
-        hour = ((step % N_step_day) / N_step_day) * 24
-        rate_multiplier = arrival_pattern.rate_at_hour(hour)
-        lam = base_lambda * rate_multiplier
+        lam = arrival_lambda[step % N_step_day]
         n_arrivals = np.random.poisson(lam)
         for _ in range(n_arrivals):
             ct = choose_container_type(container_types)
