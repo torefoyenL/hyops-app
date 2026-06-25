@@ -394,11 +394,10 @@ with tab_plant:
     # ── Architecture ──────────────────────────────────────────
     with sub_arch:
         st.header("Reliability Architecture")
-        if st.button("▶ Draw architecture", type="primary", key="btn_arch"):
-            with st.spinner("Drawing..."):
-                with silence_show():
-                    rpo.plot_plant_architecture(TOPOLOGY)
-                show_figs()
+        st.plotly_chart(
+            rpo.draw_plant_architecture_plotly(TOPOLOGY, ram_params=st.session_state["ram_params"]),
+            use_container_width=True,
+        )
         with st.expander("Topology summary"):
             st.code(TOPOLOGY.summary(), language=None)
 
