@@ -314,6 +314,7 @@ with st.sidebar.expander("🚛 Container fleet", expanded=False):
     frac_a = st.slider("Type-A  (1000 kg)", 0.0, 1.0, 0.3, 0.05, key="fa")
     frac_b = st.slider("Type-B  (600 kg)",  0.0, 1.0, 0.5, 0.05, key="fb")
     frac_c = st.slider("Type-C  (300 kg)",  0.0, 1.0, 0.2, 0.05, key="fc")
+    container_seed = st.number_input("Container seed", min_value=0, value=7, step=1, key="container_seed")
 
 # ── Arrivals ─────────────────────────────────────────────────
 with st.sidebar.expander("📦 Arrivals", expanded=False):
@@ -332,6 +333,7 @@ with st.sidebar.expander("📦 Arrivals", expanded=False):
         peak_width  = st.slider("Peak width (hours)", 0.5, 8.0, 2.5, 0.5)
         peak_weight = st.slider("Weight on first peak", 0.1, 0.9, 0.5, 0.05)
     sim_days = st.number_input("Simulated days", min_value=1, value=31, step=1)
+    arrival_seed = st.number_input("Arrival seed", min_value=0, value=42, step=1, key="arrival_seed")
 
 # ── Cost & Revenue ───────────────────────────────────────────
 with st.sidebar.expander("💰 Cost & Revenue", expanded=False):
@@ -912,10 +914,7 @@ with tab_ops:
 
         # ── 3. Animated arrival scatter on the PDF ──────────────
         st.subheader("Simulated Arrivals Preview")
-        ac1, ac2, ac3 = st.columns(3)
-        anim_speed = ac1.slider("Animation speed (ms/frame)", 50, 2000, 400, 50, key="anim_speed")
-        arrival_seed = ac2.number_input("Arrival seed", min_value=0, value=42, step=1, key="arrival_seed")
-        container_seed = ac3.number_input("Container seed", min_value=0, value=7, step=1, key="container_seed")
+        anim_speed = st.slider("Animation speed (ms/frame)", 50, 2000, 400, 50, key="anim_speed")
 
         n_preview_days = 365
         n_frames = 50
@@ -1037,6 +1036,8 @@ with tab_ops:
                     container_types=_containers,
                     plant=_plant, days=int(sim_days), schedule=_schedule,
                     avg_arrivals_per_day=float(avg_arrivals), step_minutes=1,
+                    random_seed=int(arrival_seed),
+                    container_seed=int(container_seed),
                     arrival_pattern=_pattern, reliability_model=_rel_model,
                 )
                 kpis = rpo.compute_kpis(result, _plant, _containers,

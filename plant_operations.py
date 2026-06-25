@@ -415,11 +415,11 @@ class ArrivalPattern:
 
 
 def run_simulation(container_types, plant, avg_arrivals_per_day, days, step_minutes,
-                   random_seed=17, schedule=None, arrival_pattern=None,
-                   reliability_model=None):
+                   random_seed=17, container_seed=None, schedule=None,
+                   arrival_pattern=None, reliability_model=None):
     import numpy as np
-    random.seed(random_seed)
     np.random.seed(random_seed)
+    random.seed(container_seed if container_seed is not None else random_seed)
 
     if schedule is None:
         schedule = StaffSchedule(manned=True)
