@@ -955,26 +955,29 @@ with tab_plant:
                     tickfont=dict(size=9), row=2, col=1,
                 )
 
-                # ── Row 3: Downtime classification ────────────
-                # Downsample for performance
+                # ── Row 3: Capacity loss (PM vs failure) ──────
+                loss = (1.0 - cap) * 100
+                pm_loss   = loss * pm_hist.astype(float)
+                fail_loss = loss * (~pm_hist).astype(float)
+
                 ds = max(1, len(cap) // 4000)
                 x_ds = years_ax[::ds]
-                pm_frac   = np.array([pm_down[i*ds:min((i+1)*ds, len(cap))].mean()
-                                      for i in range(len(x_ds))]) * 100
-                fail_frac = np.array([fail_down[i*ds:min((i+1)*ds, len(cap))].mean()
-                                      for i in range(len(x_ds))]) * 100
+                pm_ds   = np.array([pm_loss[i*ds:min((i+1)*ds, len(cap))].mean()
+                                    for i in range(len(x_ds))])
+                fail_ds = np.array([fail_loss[i*ds:min((i+1)*ds, len(cap))].mean()
+                                    for i in range(len(x_ds))])
 
                 fig.add_trace(go.Scatter(
-                    x=x_ds, y=pm_frac, mode="lines", fill="tozeroy",
+                    x=x_ds, y=pm_ds, mode="lines", fill="tozeroy",
                     line=dict(color="#2196F3", width=0), fillcolor="rgba(33,150,243,0.5)",
-                    name="PM downtime",
-                    hovertemplate="Year %{x:.2f}<br>PM: %{y:.0f}%<extra></extra>",
+                    name="PM capacity loss",
+                    hovertemplate="Year %{x:.2f}<br>PM loss: %{y:.1f}%<extra></extra>",
                 ), row=3, col=1)
                 fig.add_trace(go.Scatter(
-                    x=x_ds, y=pm_frac + fail_frac, mode="lines", fill="tonexty",
+                    x=x_ds, y=pm_ds + fail_ds, mode="lines", fill="tonexty",
                     line=dict(color="#E24B4A", width=0), fillcolor="rgba(226,75,74,0.5)",
-                    name="Failure downtime",
-                    hovertemplate="Year %{x:.2f}<br>Failure: %{y:.0f}%<extra></extra>",
+                    name="Failure capacity loss",
+                    hovertemplate="Year %{x:.2f}<br>Total loss: %{y:.1f}%<extra></extra>",
                 ), row=3, col=1)
 
                 for y in range(1, n_years + 1):
@@ -985,7 +988,7 @@ with tab_plant:
                     xaxis3=dict(title="Year", tickmode="linear", dtick=1,
                                 rangeslider=dict(visible=True, thickness=0.04)),
                     yaxis=dict(title="Capacity (%)", range=[0, 108]),
-                    yaxis3=dict(title="Downtime (%)", range=[0, max(15, (pm_frac+fail_frac).max()*1.3)]),
+                    yaxis3=dict(title="Capacity loss (%)", range=[0, max(15, (pm_ds+fail_ds).max()*1.3)]),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
                     margin=dict(l=55, r=20, t=50, b=60),
                     hovermode="x unified", plot_bgcolor="#F8F7F4", paper_bgcolor="white",
