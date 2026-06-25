@@ -247,7 +247,7 @@ def plot_results(results):
     _LAYOUT = dict(plot_bgcolor="#F8F7F4", paper_bgcolor="white",
                    margin=dict(l=50, r=50, t=50, b=50), hovermode="x unified")
 
-    figs = []
+    figs = {}
 
     # =========================================================
     # 1  Pressure + Production (dual y-axis)
@@ -270,7 +270,7 @@ def plot_results(results):
     )
     fig1.update_yaxes(title_text="Pressure (bar)", color="blue", secondary_y=False)
     fig1.update_yaxes(title_text="Production (kg/h)", color="green", secondary_y=True)
-    figs.append(fig1)
+    figs["pressure_production"] = fig1
 
     # =========================================================
     # 2  3-Zone Queue Overview
@@ -308,7 +308,7 @@ def plot_results(results):
         yaxis=dict(title="Number of Containers", dtick=1),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
-    figs.append(fig2)
+    figs["queue_zones"] = fig2
 
     # =========================================================
     # 3  Per-Compressor Filling + Utilisation Bar
@@ -333,7 +333,7 @@ def plot_results(results):
             yaxis=dict(title="Filling (1 = active)", dtick=1),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         )
-        figs.append(fig3)
+        figs["comp_filling_activity"] = fig3
 
         avg_fill = [np.mean(comp_filling_log[i]) for i in range(n_comp)]
         fig3b = go.Figure()
@@ -348,7 +348,7 @@ def plot_results(results):
             title="Average Fill Utilisation per Compressor",
             yaxis=dict(title="Fill utilisation (fraction of time active)", range=[0, 1.15]),
         )
-        figs.append(fig3b)
+        figs["comp_utilisation_bar"] = fig3b
 
     # =========================================================
     # 4  Time Distribution Histograms — all 3 zones
@@ -385,7 +385,7 @@ def plot_results(results):
                        showlegend=False)
     fig4.update_xaxes(title_text="Minutes")
     fig4.update_yaxes(title_text="Containers", col=1)
-    figs.append(fig4)
+    figs["time_histograms"] = fig4
 
     # =========================================================
     # 5  Box plots by container type — all 3 zones
@@ -421,7 +421,7 @@ def plot_results(results):
         fig5.update_layout(**_LAYOUT, height=400,
                            title_text="Time by Container Type and Zone")
         fig5.update_yaxes(title_text="Minutes", col=1)
-        figs.append(fig5)
+        figs["type_boxplots"] = fig5
 
     # =========================================================
     # 6  Power
@@ -437,7 +437,7 @@ def plot_results(results):
         xaxis=dict(title="Time (minutes)", rangeslider=dict(visible=True, thickness=0.06)),
         yaxis=dict(title="Power (kW)"),
     )
-    figs.append(fig6)
+    figs["power"] = fig6
 
     # =========================================================
     # 7  Pressure Distribution
@@ -452,7 +452,7 @@ def plot_results(results):
     fig7.update_layout(**_LAYOUT, height=350, title="Plant Pressure Distribution",
                        xaxis=dict(title="Pressure (bar)"),
                        yaxis=dict(title="Frequency"), showlegend=False)
-    figs.append(fig7)
+    figs["pressure_distribution"] = fig7
 
     return figs
 

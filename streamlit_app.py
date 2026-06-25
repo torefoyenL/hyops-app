@@ -891,12 +891,24 @@ with tab_ops:
                 import pandas as pd
                 st.dataframe(pd.DataFrame([kpis]).T.rename(columns={0: "value"}), use_container_width=True)
             with st.expander("Economics"):
-                import pandas as pd
-                st.dataframe(pd.DataFrame([econ]).T.rename(columns={0: "value"}), use_container_width=True)
                 st.plotly_chart(ep.plot_waterfall(econ), use_container_width=True)
-            with st.expander("Operations plots"):
-                for fig in rpo.plot_results(result):
-                    st.plotly_chart(fig, use_container_width=True)
+
+            plots = rpo.plot_results(result)
+            with st.expander("Operational Plots"):
+                st.plotly_chart(plots["pressure_production"], use_container_width=True)
+                st.plotly_chart(plots["queue_zones"], use_container_width=True)
+            with st.expander("Container Queue"):
+                st.plotly_chart(plots["time_histograms"], use_container_width=True)
+                if "type_boxplots" in plots:
+                    st.plotly_chart(plots["type_boxplots"], use_container_width=True)
+            with st.expander("Compressor Data"):
+                if "comp_filling_activity" in plots:
+                    st.plotly_chart(plots["comp_filling_activity"], use_container_width=True)
+                if "comp_utilisation_bar" in plots:
+                    st.plotly_chart(plots["comp_utilisation_bar"], use_container_width=True)
+                st.plotly_chart(plots["pressure_distribution"], use_container_width=True)
+            with st.expander("Power Use"):
+                st.plotly_chart(plots["power"], use_container_width=True)
 
     with sub_schedule:
         st.header("Schedule Comparison")
