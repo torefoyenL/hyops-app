@@ -260,18 +260,31 @@ def generate_fmea(topology):
 # ============================================================
 
 st.sidebar.title("⚙️ HyOps Configuration")
-#1
+_d = st.session_state.get("_cfg_defaults", {})
+
+_TOPO_MODES = ["Common Header at low and high pressure",
+               "Common Header at low pressure, dedicated fill lines per compressor",
+               "Seperate trains"]
 
 # ── Topology ─────────────────────────────────────────────────
+n_ez = n_comp = n_fill = 0
+lines_per_comp = lines_per_train = 0
+n_trains = ez_per_train = comp_per_train = 0
+ez_kg_hr_each = comp_kg_hr_each = 0.0
+ez_kg_hr_each_train = comp_kg_hr_each_train = 0.0
+stacks = 2
+
 with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
-    topology_mode = st.selectbox("Topology lauout mode", ["Common Header at low and high pressure", "Common Header at low pressure, dedicated fill lines per compressor", "Seperate trains"])
-    if topology_mode == "Common Header at low and high pressure":
-        n_ez            = st.slider("Electrolyzers", 1, 8, 3)
-        stacks          = st.slider("Stacks per electrolyzer", 1, 4, 2)
-        ez_kg_hr_each   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
-        n_comp          = st.slider("Compressors", 1, 6, 2)
-        comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=round(ez_kg_hr_each * n_ez / n_comp, 1), step=1.0)
-        n_fill          = st.slider("Shared fill lines", 1, 12, 4)
+    _topo_default = _d.get("topology_mode", _TOPO_MODES[0])
+    _topo_idx = _TOPO_MODES.index(_topo_default) if _topo_default in _TOPO_MODES else 0
+    topology_mode = st.selectbox("Topology lauout mode", _TOPO_MODES, index=_topo_idx)
+    if topology_mode == _TOPO_MODES[0]:
+        n_ez            = st.slider("Electrolyzers", 1, 8, _d.get("n_ez", 3))
+        stacks          = st.slider("Stacks per electrolyzer", 1, 4, _d.get("stacks", 2))
+        ez_kg_hr_each   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=float(_d.get("ez_kg_hr_each", 44.0)), step=1.0)
+        n_comp          = st.slider("Compressors", 1, 6, _d.get("n_comp", 2))
+        comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=float(_d.get("comp_kg_hr_each", round(ez_kg_hr_each * n_ez / n_comp, 1))), step=1.0)
+        n_fill          = st.slider("Shared fill lines", 1, 12, _d.get("n_fill", 4))
         TOPOLOGY = pt.PlantTopology(
             mode="common", n_electrolyzers=n_ez, stacks_per_electrolyzer=stacks,
             electrolyzer_kg_per_hr_each=ez_kg_hr_each,
@@ -279,13 +292,13 @@ with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
             compressor_flow_kg_per_hr_each=comp_kg_hr_each,
             n_fill_lines=n_fill,
         )
-    elif topology_mode == "Common Header at low pressure, dedicated fill lines per compressor":
-        n_ez            = st.slider("Electrolyzers", 1, 8, 3)
-        stacks          = st.slider("Stacks per electrolyzer", 1, 4, 2)
-        ez_kg_hr_each   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=44.0, step=1.0)
-        n_comp          = st.slider("Compressors", 1, 6, 2)
-        comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=round(ez_kg_hr_each * n_ez / n_comp, 1), step=1.0)
-        lines_per_comp  = st.slider("Fill lines per compressor", 1, 6, 2)
+    elif topology_mode == _TOPO_MODES[1]:
+        n_ez            = st.slider("Electrolyzers", 1, 8, _d.get("n_ez", 3))
+        stacks          = st.slider("Stacks per electrolyzer", 1, 4, _d.get("stacks", 2))
+        ez_kg_hr_each   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=float(_d.get("ez_kg_hr_each", 44.0)), step=1.0)
+        n_comp          = st.slider("Compressors", 1, 6, _d.get("n_comp", 2))
+        comp_kg_hr_each = st.number_input("Flow per compressor (kg/hr)", 1.0, value=float(_d.get("comp_kg_hr_each", round(ez_kg_hr_each * n_ez / n_comp, 1))), step=1.0)
+        lines_per_comp  = st.slider("Fill lines per compressor", 1, 6, _d.get("lines_per_comp", 2))
         TOPOLOGY = pt.PlantTopology(
             mode="pooled_ez_dedicated_comp",
             n_electrolyzers=n_ez, stacks_per_electrolyzer=stacks,
@@ -295,13 +308,13 @@ with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
             n_fill_lines_per_compressor=lines_per_comp,
         )
     else:
-        n_trains              = st.slider("Number of trains", 2, 4, 2)
-        ez_per_train          = st.slider("Electrolyzers per train", 1, 4, 2)
-        stacks                = st.slider("Stacks per electrolyzer", 1, 4, 2)
-        ez_kg_hr_each_train   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=22.0, step=1.0)
-        comp_per_train        = st.slider("Compressors per train", 1, 3, 1)
-        comp_kg_hr_each_train = st.number_input("Flow per compressor (kg/hr)", 1.0, value=round(ez_kg_hr_each_train * ez_per_train / comp_per_train, 1), step=1.0)
-        lines_per_train       = st.slider("Fill lines per train", 1, 6, 2)
+        n_trains              = st.slider("Number of trains", 2, 4, _d.get("n_trains", 2))
+        ez_per_train          = st.slider("Electrolyzers per train", 1, 4, _d.get("ez_per_train", 2))
+        stacks                = st.slider("Stacks per electrolyzer", 1, 4, _d.get("stacks", 2))
+        ez_kg_hr_each_train   = st.number_input("Capacity per electrolyzer (kg/hr)", 1.0, value=float(_d.get("ez_kg_hr_each_train", 22.0)), step=1.0)
+        comp_per_train        = st.slider("Compressors per train", 1, 3, _d.get("comp_per_train", 1))
+        comp_kg_hr_each_train = st.number_input("Flow per compressor (kg/hr)", 1.0, value=float(_d.get("comp_kg_hr_each_train", round(ez_kg_hr_each_train * ez_per_train / comp_per_train, 1))), step=1.0)
+        lines_per_train       = st.slider("Fill lines per train", 1, 6, _d.get("lines_per_train", 2))
         TOPOLOGY = pt.PlantTopology(
             mode="trains",
             trains=[
@@ -339,8 +352,8 @@ with st.sidebar.expander("🏗️ Plant & Topology", expanded=True):
 
 # ── RAM on/off ───────────────────────────────────────────────
 with st.sidebar.expander("⚡ Reliability (RAM)", expanded=False):
-    RELIABILITY_ON   = st.toggle("Simulate with live availability", value=False)
-    RELIABILITY_SEED = st.number_input("Reliability seed", min_value=0, value=42, step=1,
+    RELIABILITY_ON   = st.toggle("Simulate with live availability", value=_d.get("reliability_on", False))
+    RELIABILITY_SEED = st.number_input("Reliability seed", min_value=0, value=int(_d.get("reliability_seed", 42)), step=1,
                                         disabled=not RELIABILITY_ON)
 
 # ── Container fleet ──────────────────────────────────────────
@@ -351,25 +364,28 @@ with st.sidebar.expander("🚛 Container fleet", expanded=False):
     container_seed = st.number_input("Container seed", min_value=0, value=7, step=1, key="container_seed")
 
 # ── Arrivals ─────────────────────────────────────────────────
+_PAT_MODES = ["uniform", "single_peak", "double_peak"]
 with st.sidebar.expander("📦 Arrivals", expanded=False):
-    avg_arrivals = st.number_input("Avg containers / day", min_value=0.01, value=3.0,
-                                    step=0.5, format="%.1f")
-    pattern_type = st.selectbox("Timing pattern", ["uniform", "single_peak", "double_peak"])
+    avg_arrivals = st.number_input("Avg containers / day", min_value=0.01,
+                                    value=float(_d.get("avg_arrivals", 3.0)), step=0.5, format="%.1f")
+    _pat_default = _d.get("pattern_type", "uniform")
+    _pat_idx = _PAT_MODES.index(_pat_default) if _pat_default in _PAT_MODES else 0
+    pattern_type = st.selectbox("Timing pattern", _PAT_MODES, index=_pat_idx)
     peak_hour = peak_hour_2 = None
-    peak_width = 3.0
-    peak_width_2 = 3.0
-    peak_weight = 0.5
+    peak_width = _d.get("peak_width", 3.0)
+    peak_width_2 = _d.get("peak_width_2", 3.0)
+    peak_weight = _d.get("peak_weight", 0.5)
     if pattern_type == "single_peak":
-        peak_hour  = st.slider("Peak hour", 0.0, 24.0, 8.0, 0.5)
-        peak_width = st.slider("Peak width (hours)", 0.5, 8.0, 3.0, 0.5)
+        peak_hour  = st.slider("Peak hour", 0.0, 24.0, float(_d.get("peak_hour", 8.0)), 0.5)
+        peak_width = st.slider("Peak width (hours)", 0.5, 8.0, float(_d.get("peak_width", 3.0)), 0.5)
     elif pattern_type == "double_peak":
-        peak_hour   = st.slider("First peak hour",  0.0, 24.0,  8.0, 0.5)
-        peak_width  = st.slider("First peak width (hours)", 0.5, 8.0, 2.5, 0.5)
-        peak_hour_2 = st.slider("Second peak hour", 0.0, 24.0, 16.0, 0.5)
-        peak_width_2 = st.slider("Second peak width (hours)", 0.5, 8.0, 2.5, 0.5)
-        peak_weight = st.slider("Weight on first peak", 0.1, 0.9, 0.5, 0.05)
-    sim_days = st.number_input("Simulated days", min_value=1, value=31, step=1)
-    arrival_seed = st.number_input("Arrival seed", min_value=0, value=42, step=1, key="arrival_seed")
+        peak_hour   = st.slider("First peak hour",  0.0, 24.0, float(_d.get("peak_hour", 8.0)), 0.5)
+        peak_width  = st.slider("First peak width (hours)", 0.5, 8.0, float(_d.get("peak_width", 2.5)), 0.5)
+        peak_hour_2 = st.slider("Second peak hour", 0.0, 24.0, float(_d.get("peak_hour_2", 16.0)), 0.5)
+        peak_width_2 = st.slider("Second peak width (hours)", 0.5, 8.0, float(_d.get("peak_width_2", 2.5)), 0.5)
+        peak_weight = st.slider("Weight on first peak", 0.1, 0.9, float(_d.get("peak_weight", 0.5)), 0.05)
+    sim_days = st.number_input("Simulated days", min_value=1, value=int(_d.get("sim_days", 31)), step=1)
+    arrival_seed = st.number_input("Arrival seed", min_value=0, value=int(_d.get("arrival_seed", 42)), step=1, key="arrival_seed")
 
 # ── Cost & Revenue ───────────────────────────────────────────
 with st.sidebar.expander("💰 Cost & Revenue", expanded=False):
@@ -412,6 +428,91 @@ with st.sidebar.expander("🗄️ Database", expanded=False):
     if db_path != st.session_state["db_path"]:
         st.session_state["db_path"] = db_path
     st.caption(f"{safe_count(db_path):,} runs stored")
+
+
+# ── Save / Load Config ──────────────────────────────────────
+import supabase_store as sbs
+
+_sidebar_values = {
+    "topology_mode": topology_mode,
+    "n_ez": n_ez if topology_mode != _TOPO_MODES[2] else None,
+    "stacks": stacks,
+    "ez_kg_hr_each": ez_kg_hr_each if topology_mode != _TOPO_MODES[2] else None,
+    "n_comp": n_comp if topology_mode != _TOPO_MODES[2] else None,
+    "comp_kg_hr_each": comp_kg_hr_each if topology_mode != _TOPO_MODES[2] else None,
+    "n_fill": n_fill if topology_mode == _TOPO_MODES[0] else None,
+    "lines_per_comp": lines_per_comp if topology_mode == _TOPO_MODES[1] else None,
+    "n_trains": n_trains if topology_mode == _TOPO_MODES[2] else None,
+    "ez_per_train": ez_per_train if topology_mode == _TOPO_MODES[2] else None,
+    "comp_per_train": comp_per_train if topology_mode == _TOPO_MODES[2] else None,
+    "ez_kg_hr_each_train": ez_kg_hr_each_train if topology_mode == _TOPO_MODES[2] else None,
+    "comp_kg_hr_each_train": comp_kg_hr_each_train if topology_mode == _TOPO_MODES[2] else None,
+    "lines_per_train": lines_per_train if topology_mode == _TOPO_MODES[2] else None,
+    "reliability_on": RELIABILITY_ON,
+    "reliability_seed": RELIABILITY_SEED,
+    "frac_a": frac_a, "frac_b": frac_b, "frac_c": frac_c,
+    "container_seed": container_seed,
+    "avg_arrivals": avg_arrivals, "pattern_type": pattern_type,
+    "peak_hour": peak_hour, "peak_hour_2": peak_hour_2,
+    "peak_width": peak_width, "peak_width_2": peak_width_2,
+    "peak_weight": peak_weight, "sim_days": sim_days,
+    "arrival_seed": arrival_seed,
+}
+
+_sb_client = sbs.get_supabase_client()
+if _sb_client is not None:
+    with st.sidebar.expander("💾 Save / Load Config", expanded=False):
+        st.subheader("Save")
+        _cfg_name = st.text_input("Config name", key="cfg_save_name")
+        _cfg_desc = st.text_input("Description (optional)", key="cfg_save_desc")
+        if st.button("Save current config", type="primary", key="btn_cfg_save"):
+            if _cfg_name.strip():
+                snap = sbs.capture_snapshot(st.session_state, _sidebar_values)
+                row, err = sbs.save_config(_cfg_name.strip(), _cfg_desc.strip(), snap)
+                if err:
+                    st.error(f"Save failed: {err}")
+                else:
+                    st.success(f"Saved '{_cfg_name.strip()}'")
+            else:
+                st.warning("Enter a config name.")
+
+        st.divider()
+        st.subheader("Load")
+        _configs = sbs.list_configs()
+        if _configs:
+            _cfg_options = {c["id"]: f"{c['name']}  ({c['created_at'][:10]})" for c in _configs}
+            _sel_id = st.selectbox("Saved configs", list(_cfg_options.keys()),
+                                    format_func=lambda x: _cfg_options[x], key="cfg_sel")
+            _sel_cfg = next((c for c in _configs if c["id"] == _sel_id), None)
+            if _sel_cfg and _sel_cfg.get("description"):
+                st.caption(_sel_cfg["description"])
+
+            _load_sections = st.multiselect("Sections to load",
+                sbs.SECTION_KEYS, default=sbs.SECTION_KEYS,
+                format_func=lambda k: sbs.SECTION_LABELS.get(k, k),
+                key="cfg_load_sections")
+
+            lc1, lc2 = st.columns(2)
+            if lc1.button("Load", type="primary", key="btn_cfg_load"):
+                data, err = sbs.load_config(_sel_id)
+                if err:
+                    st.error(f"Load failed: {err}")
+                elif data:
+                    sbs.apply_sections(data["config_data"], _load_sections, st.session_state)
+                    st.rerun()
+            if lc2.button("Delete", key="btn_cfg_del"):
+                ok, err = sbs.delete_config(_sel_id)
+                if ok:
+                    st.rerun()
+                elif err:
+                    st.error(f"Delete failed: {err}")
+        else:
+            st.caption("No saved configs yet.")
+else:
+    st.sidebar.caption("💾 Config save/load: configure Supabase in secrets")
+
+# Consume _cfg_defaults after sidebar renders
+st.session_state.pop("_cfg_defaults", None)
 
 
 # ============================================================
