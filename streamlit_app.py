@@ -1636,15 +1636,59 @@ with tab_ops:
                     )
                     rows.append({"schedule": lbl, **kpis, **{k: v for k, v in econ.items() if k != "schedule_label"}})
             import pandas as pd
-            df = pd.DataFrame(rows).set_index("schedule")
-            st.dataframe(df, use_container_width=True)
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
 
-            # Economics plots
+            sched_labels = [r["schedule"] for r in rows]
+            _LAY = dict(plot_bgcolor="#F8F7F4", paper_bgcolor="white",
+                        margin=dict(l=60, r=20, t=50, b=50))
+
+            # ── Key metrics comparison ────────────────────────
+            fig_kpi = make_subplots(rows=2, cols=2,
+                subplot_titles=("Plant Utilisation (%)", "H₂ Dispensed (kg)",
+                                "Avg External Queue (trailers)", "Avg Total Time (min)"),
+                vertical_spacing=0.15, horizontal_spacing=0.10)
+            _kpi_data = [
+                (1, 1, [r["plant_utilization"]*100 for r in rows], "#1D9E75"),
+                (1, 2, [r["total_dispensed_kg"] for r in rows], "#2196F3"),
+                (2, 1, [r["avg_external_queue"] for r in rows], "#E24B4A"),
+                (2, 2, [r["avg_total_time_min"] for r in rows], "#FF9800"),
+            ]
+            for row_i, col_i, vals, color in _kpi_data:
+                fig_kpi.add_trace(go.Bar(
+                    x=sched_labels, y=vals, marker_color=color,
+                    text=[f"{v:.1f}" for v in vals], textposition="outside",
+                    showlegend=False,
+                ), row=row_i, col=col_i)
+            fig_kpi.update_layout(**_LAY, height=500, title="Schedule Comparison — Key Metrics")
+            st.plotly_chart(fig_kpi, use_container_width=True)
+
+            # ── Queue & wait breakdown ────────────────────────
+            fig_wait = go.Figure()
+            fig_wait.add_trace(go.Bar(
+                x=sched_labels, y=[r["ext_avg"] for r in rows],
+                name="External wait", marker_color="#E24B4A",
+            ))
+            fig_wait.add_trace(go.Bar(
+                x=sched_labels, y=[r["doc_avg"] for r in rows],
+                name="Docked wait", marker_color="#FF9800",
+            ))
+            fig_wait.add_trace(go.Bar(
+                x=sched_labels, y=[r["fill_avg"] for r in rows],
+                name="Fill time", marker_color="#2196F3",
+            ))
+            fig_wait.update_layout(**_LAY, height=400, barmode="stack",
+                title="Average Container Time Breakdown (min)",
+                yaxis=dict(title="Minutes"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+            st.plotly_chart(fig_wait, use_container_width=True)
+
+            # ── Economics waterfall per schedule ───────────────
             econ_rows = []
             for r in rows:
                 econ_rows.append({
                     "schedule_label": r["schedule"],
-                    **{k: v for k, v in r.items() if "kr" in k}
+                    **{k: v for k, v in r.items() if "kr" in k or k == "schedule"}
                 })
             econ_df_cmp = pd.DataFrame(econ_rows)
             if not econ_df_cmp.empty and "revenue_kr_annual" in econ_df_cmp.columns:
@@ -1654,8 +1698,6 @@ with tab_ops:
                            .reindex(sched_order).dropna(how="all").reset_index())
                 st.subheader("Revenue vs. cost breakdown")
                 st.plotly_chart(ep.plot_stacked_bar(summary), use_container_width=True)
-                st.subheader("Net result spread")
-                st.plotly_chart(ep.plot_net_result_spread(econ_df_cmp, sched_order, float(avg_arrivals), 1), use_container_width=True)
 
 
 # ────────────────────────────────────────────────────────────
