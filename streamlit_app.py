@@ -1611,53 +1611,78 @@ with tab_ops:
         compare_scheds = st.multiselect("Schedules to compare", ALL_SCHEDULES,
                                          default=["unmanned","8-16_closed","8-20_open","24_7"],
                                          key="cmp_scheds")
+        cmp_seeds = st.slider("Seeds per schedule", 1, 30, 5, key="cmp_seeds")
         if st.button("▶ Compare schedules", type="primary", key="btn_cmp") and compare_scheds:
             _containers = make_container_types(frac_a, frac_b, frac_c)
             _pattern    = make_arrival_pattern(pattern_type, peak_hour, peak_hour_2, peak_width, peak_width_2, peak_weight)
-            rows = []
-            with st.spinner("Running..."):
+            all_rows = []
+            with st.spinner(f"Running {len(compare_scheds)} schedules × {cmp_seeds} seeds..."):
                 for lbl in compare_scheds:
-                    _plant  = po.HydrogenPlant(topology=TOPOLOGY, step_minutes=1)
-                    _rel    = make_rel_model(TOPOLOGY, RELIABILITY_SEED, RELIABILITY_ON)
-                    result  = po.run_simulation(
-                        container_types=_containers,
-                        plant=_plant, days=int(sim_days), schedule=make_schedule(lbl),
-                        avg_arrivals_per_day=float(avg_arrivals), step_minutes=1,
-                        arrival_pattern=_pattern, reliability_model=_rel,
-                    )
-                    kpis = rpo.compute_kpis(result, _plant, _containers,
-                                             float(avg_arrivals), int(sim_days))
-                    econ = eco.run_economics(
-                        result, kpis, lbl, int(sim_days),
-                        margin_kr_per_kg=float(st.session_state["margin_kr"]),
-                        queue_cost_kr_per_hr=float(st.session_state["queue_cost_kr"]),
-                        container_cost_kr_per_hr=container_cost_kr_per_hr,
-                        staff_cost_overrides=st.session_state["staff_costs"],
-                    )
-                    rows.append({"schedule": lbl, **kpis, **{k: v for k, v in econ.items() if k != "schedule_label"}})
+                    for seed_i in range(cmp_seeds):
+                        _plant = po.HydrogenPlant(topology=TOPOLOGY, step_minutes=1)
+                        _rel   = make_rel_model(TOPOLOGY, RELIABILITY_SEED, RELIABILITY_ON)
+                        result = po.run_simulation(
+                            container_types=_containers,
+                            plant=_plant, days=int(sim_days), schedule=make_schedule(lbl),
+                            avg_arrivals_per_day=float(avg_arrivals), step_minutes=1,
+                            random_seed=int(arrival_seed) + seed_i,
+                            container_seed=int(container_seed) + seed_i,
+                            arrival_pattern=_pattern, reliability_model=_rel,
+                        )
+                        kpis = rpo.compute_kpis(result, _plant, _containers,
+                                                 float(avg_arrivals), int(sim_days))
+                        econ = eco.run_economics(
+                            result, kpis, lbl, int(sim_days),
+                            margin_kr_per_kg=float(st.session_state["margin_kr"]),
+                            queue_cost_kr_per_hr=float(st.session_state["queue_cost_kr"]),
+                            container_cost_kr_per_hr=container_cost_kr_per_hr,
+                            staff_cost_overrides=st.session_state["staff_costs"],
+                        )
+                        all_rows.append({"schedule": lbl, "seed": seed_i,
+                                         **kpis, **{k: v for k, v in econ.items() if k != "schedule_label"}})
+            st.session_state["cmp_results"] = all_rows
+
+        if st.session_state.get("cmp_results"):
             import pandas as pd
+            import numpy as np
             import plotly.graph_objects as go
             from plotly.subplots import make_subplots
 
-            sched_labels = [r["schedule"] for r in rows]
+            all_rows = st.session_state["cmp_results"]
+            sched_labels = list(dict.fromkeys(r["schedule"] for r in all_rows))
+            n_seeds_cmp = max(r["seed"] for r in all_rows) + 1
             _LAY = dict(plot_bgcolor="#F8F7F4", paper_bgcolor="white",
                         margin=dict(l=60, r=20, t=50, b=50))
+
+            def _agg(key):
+                means, stds = [], []
+                for lbl in sched_labels:
+                    vals = [r[key] for r in all_rows if r["schedule"] == lbl]
+                    means.append(np.mean(vals))
+                    stds.append(np.std(vals))
+                return means, stds
+
+            st.caption(f"Mean ± std across **{n_seeds_cmp} seeds** per schedule")
 
             # ── Key metrics comparison ────────────────────────
             fig_kpi = make_subplots(rows=2, cols=2,
                 subplot_titles=("Plant Utilisation (%)", "H₂ Dispensed (kg)",
                                 "Avg External Queue (trailers)", "Avg Total Time (min)"),
                 vertical_spacing=0.15, horizontal_spacing=0.10)
-            _kpi_data = [
-                (1, 1, [r["plant_utilization"]*100 for r in rows], "#1D9E75"),
-                (1, 2, [r["total_dispensed_kg"] for r in rows], "#2196F3"),
-                (2, 1, [r["avg_external_queue"] for r in rows], "#E24B4A"),
-                (2, 2, [r["avg_total_time_min"] for r in rows], "#FF9800"),
+            _kpi_specs = [
+                (1, 1, "plant_utilization", 100, "#1D9E75"),
+                (1, 2, "total_dispensed_kg", 1, "#2196F3"),
+                (2, 1, "avg_external_queue", 1, "#E24B4A"),
+                (2, 2, "avg_total_time_min", 1, "#FF9800"),
             ]
-            for row_i, col_i, vals, color in _kpi_data:
+            for row_i, col_i, key, scale, color in _kpi_specs:
+                means, stds = _agg(key)
+                means = [m * scale for m in means]
+                stds = [s * scale for s in stds]
                 fig_kpi.add_trace(go.Bar(
-                    x=sched_labels, y=vals, marker_color=color,
-                    text=[f"{v:.1f}" for v in vals], textposition="outside",
+                    x=sched_labels, y=means, marker_color=color,
+                    error_y=dict(type="data", array=stds, color="#888", thickness=1.5),
+                    text=[f"{v:.1f}" for v in means], textposition="outside",
                     showlegend=False,
                 ), row=row_i, col=col_i)
             fig_kpi.update_layout(**_LAY, height=500, title="Schedule Comparison — Key Metrics")
@@ -1665,30 +1690,40 @@ with tab_ops:
 
             # ── Queue & wait breakdown ────────────────────────
             fig_wait = go.Figure()
-            fig_wait.add_trace(go.Bar(
-                x=sched_labels, y=[r["ext_avg"] for r in rows],
-                name="External wait", marker_color="#E24B4A",
-            ))
-            fig_wait.add_trace(go.Bar(
-                x=sched_labels, y=[r["doc_avg"] for r in rows],
-                name="Docked wait", marker_color="#FF9800",
-            ))
-            fig_wait.add_trace(go.Bar(
-                x=sched_labels, y=[r["fill_avg"] for r in rows],
-                name="Fill time", marker_color="#2196F3",
-            ))
+            for key, name, color in [("ext_avg","External wait","#E24B4A"),
+                                      ("doc_avg","Docked wait","#FF9800"),
+                                      ("fill_avg","Fill time","#2196F3")]:
+                means, _ = _agg(key)
+                fig_wait.add_trace(go.Bar(
+                    x=sched_labels, y=means, name=name, marker_color=color,
+                ))
             fig_wait.update_layout(**_LAY, height=400, barmode="stack",
                 title="Average Container Time Breakdown (min)",
                 yaxis=dict(title="Minutes"),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
             st.plotly_chart(fig_wait, use_container_width=True)
 
-            # ── Economics waterfall per schedule ───────────────
+            # ── Net result box plot ───────────────────────────
+            fig_box = go.Figure()
+            _PAL = ["#1D9E75","#533483","#4682B4","#EF9F27","#D85A30","#E24B4A","#639922","#8B4513"]
+            for i, lbl in enumerate(sched_labels):
+                vals = [r["net_kr_annual"] for r in all_rows if r["schedule"] == lbl]
+                fig_box.add_trace(go.Box(
+                    y=vals, name=lbl, marker_color=_PAL[i % len(_PAL)], boxmean=True,
+                    hovertemplate="%{y:,.0f} kr/yr<extra>" + lbl + "</extra>",
+                ))
+            fig_box.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
+            fig_box.update_layout(**_LAY, height=420, showlegend=False,
+                title=f"Net Result Spread ({n_seeds_cmp} seeds)",
+                yaxis=dict(title="Net result (kr/year)", tickformat=",.0f"))
+            st.plotly_chart(fig_box, use_container_width=True)
+
+            # ── Economics stacked bar ─────────────────────────
             econ_rows = []
-            for r in rows:
+            for r in all_rows:
                 econ_rows.append({
                     "schedule_label": r["schedule"],
-                    **{k: v for k, v in r.items() if "kr" in k or k == "schedule"}
+                    **{k: v for k, v in r.items() if "kr" in k}
                 })
             econ_df_cmp = pd.DataFrame(econ_rows)
             if not econ_df_cmp.empty and "revenue_kr_annual" in econ_df_cmp.columns:
